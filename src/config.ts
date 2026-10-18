@@ -1,0 +1,61 @@
+import { existsSync } from 'node:fs';
+import { z } from 'zod';
+
+// Empty strings in .env files (e.g. `PAYPAL_WEBHOOK_ID=`) should count as "not set".
+const optional = z
+  .string()
+  .optional()
+  .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()));
+const required = z.string({ error: 'is missing' }).trim().min(1, 'is empty');
+
+const envSchema = z.object({
+  // PayPal
+  PAYPAL_CLIENT_ID: required,
+  PAYPAL_CLIENT_SECRET: required,
+  PAYPAL_MODE: z.literal('sandbox').default('sandbox'), // sandbox only — see SCOPE.md hard limits
+  PAYPAL_WEBHOOK_ID: optional, // filled after Render deploy
+
+  // Telegram
+  TELEGRAM_BOT_TOKEN: required,
+
+  // LLM
+  GROQ_API_KEY: required,
+  GOOGLE_GENERATIVE_AI_API_KEY: optional, // Gemini fallback, wired in milestone 12
+  LLM_PROVIDER: z.enum(['groq', 'google']).default('groq'),
+  LLM_MODEL: z.string().trim().min(1).default('openai/gpt-oss-120b'),
+
+  // Supabase
+  SUPABASE_URL: z.url({ error: 'is missing or not a valid URL' }),
+  SUPABASE_ANON_KEY: optional,
+  SUPABASE_SERVICE_KEY: required,
+  SUPABASE_DB_URL: optional, // only used by `npm run db:push`
+
+  // App
+  PORT: z.coerce.number().int().positive().default(3000),
+  PUBLIC_URL: optional.pipe(z.url().optional()), // unset → bot uses long polling (local dev)
+});
+
+export type Config = z.infer<typeof envSchema>;
+
+/** Validate an env object. Throws one error listing every bad/missing var. */
+export function parseConfig(env: Record<string, string | undefined>): Config {
+  const result = envSchema.safeParse(env);
+  if (!result.success) {
+    const lines = result.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`);
+    throw new Error(
+      `Invalid environment configuration:\n${lines.join('\n')}\n` +
+        'Fix these in .env.local (see .env.example for the full list).',
+    );
+  }
+  return result.data;
+}
+
+let cached: Config | undefined;
+
+/** Load .env.local (if present — on Render vars come from the dashboard) and validate. */
+export function loadConfig(): Config {
+  if (cached) return cached;
+  if (existsSync('.env.local')) process.loadEnvFile('.env.local');
+  cached = parseConfig(process.env);
+  return cached;
+}

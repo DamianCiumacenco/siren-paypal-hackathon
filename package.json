@@ -1,0 +1,36 @@
+{
+  "name": "siren",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous PayPal payment agent on Telegram — built on the PayPal Agent Toolkit",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:push": "tsx scripts/db-push.ts",
+    "db:check": "tsx scripts/db-check.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "4.0.99",
+    "@ai-sdk/groq": "4.0.63",
+    "@paypal/agent-toolkit": "1.11.0",
+    "@supabase/supabase-js": "2.118.0",
+    "ai": "7.0.143",
+    "fastify": "5.12.7",
+    "grammy": "1.46.0",
+    "node-cron": "4.6.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  }
+}
