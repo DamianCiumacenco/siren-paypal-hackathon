@@ -15,6 +15,8 @@ Do these BEFORE handing to the build-AI. Collect every key in a `.env.local` fil
    - Type: Merchant
 4. Copy **Client ID** and **Secret** → save as `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET`
    - These are what both the PayPal Agent Toolkit AND the webhook verifier use.
+   - **App → Features: tick "Invoicing" and save.** Without it every invoice call returns `403 insufficient permissions`.
+   - ⚠️ PayPal keeps returning the same cached access token (with the *old* scopes) until it expires (~9h). After changing Features, terminate the cached token (`POST /v1/oauth2/token/terminate`) or wait for expiry.
 5. **Sandbox → Accounts → Create Account (x4, Personal, country: Ireland)**:
    - `damian@sandbox.test` (you, buyer)
    - `jay@sandbox.test` (test mate 1)
