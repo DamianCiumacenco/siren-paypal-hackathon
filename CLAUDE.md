@@ -24,7 +24,7 @@ Project: autonomous PayPal payment agent on Telegram. PayPal AI Hackathon 2026 s
 - When uncertain about scope, ASK — do not expand.
 - Keep `stopWhen: stepCountIs(6)` cap on the agent loop.
 - Never hand-roll PayPal API calls — use the toolkit. The only exception is incoming webhook signature verification (toolkit doesn't do that).
-- All env vars are already set in `.env.local` — do not re-ask the human.
+- All env vars are set in `.env.local` (incl. `SUPABASE_DB_URL`, used only by `npm run db:push`) — do not re-ask the human. Never print or log their values.
 - Commit at the end of every milestone with a clear message: `milestone N: <summary>`.
 
 ## Guardrails
