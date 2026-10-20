@@ -221,7 +221,6 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     prompt: input.userMessage,
     tools: await getAllTools(input.context),
     stopWhen: stepCountIs(6),
-    experimental_telemetry: { isEnabled: true }
   });
 
   await persistReasoning(input, result.steps, result.text);
@@ -238,16 +237,10 @@ That's it. The SDK runs the loop, calls tools, feeds results back, decides when 
 ### From `@paypal/agent-toolkit/ai-sdk` (pre-wired, we DON'T write these)
 - `create_invoice`
 - `send_invoice`
-- `list_invoices`
 - `send_invoice_reminder`
 - `cancel_sent_invoice`
-- `create_order`
-- `get_order`
-- `capture_order`
-- `create_subscription`
-- `list_disputes`
-- `get_dispute`
-- (… and more — see PayPal Agent Toolkit docs for full list)
+- Deliberately NOT exposed to the agent: `list_invoices` (lists the whole merchant account across groups — in the milestone-5 live run the agent found and reminded another group's invoice on a guess), orders (invoices only; toolkit orders are USD-only), subscriptions, disputes.
+- Every exposed invoice tool is wrapped by `src/agent/tools/paypal_scoped.ts` (the PayPal call is still the toolkit's): invoice ids must belong to this group's split members or be created in the same run; `send_invoice_reminder` shares telegram_dm's 1-per-user-per-24h limit; results are normalised to `{ ok, ... }`; `get_invoice` returns a compact summary (Groq free tier = 8k tokens/min).
 
 Toolkit setup:
 ```typescript
@@ -258,8 +251,7 @@ const paypalToolkit = new PayPalAgentToolkit({
   clientSecret: config.PAYPAL_CLIENT_SECRET,
   configuration: {
     actions: {
-      invoices: { create: true, send: true, list: true, sendReminder: true, cancel: true },
-      orders:   { create: true, get: true, capture: true }
+      invoices: { create: true, send: true, get: true, sendReminder: true, cancel: true },
     },
     context: { sandbox: true }
   }
@@ -452,7 +444,7 @@ Build-order rule: **tests pass at each milestone** before moving on.
 | Groq 1000 RPD limit | 1h prompt cache + Gemini fallback |
 | Webhook sig mismatch | Log full headers on fail; test via PayPal Simulator before live sandbox events |
 | Memory writes stale | Agent `remember_preference` validated via zod; `preferred_tone` constrained to enum |
-| Vercel AI SDK telemetry leaking data | `experimental_telemetry` on but no exporter configured; stays local |
+| Vercel AI SDK telemetry leaking data | Telemetry not enabled (no exporter); steps are persisted to `reasoning_log` ourselves, tool outputs clipped to 2,000 chars |
 
 ---
 

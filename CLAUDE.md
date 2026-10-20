@@ -30,7 +30,7 @@ Project: autonomous PayPal payment agent on Telegram. PayPal AI Hackathon 2026 s
 ## Milestone checklist (before every milestone commit)
 1. `npm run typecheck && npm test`: unit/route tests (app built with `app.inject()`, no network).
 2. `npm run test:startup`: boots the REAL server for 15s with `.env.local` and asserts it stays up, `/health` answers, and SIGTERM exits cleanly. `inject()` tests can't catch startup crashes (milestone 4: a grammy webhook/polling clash killed the server ~10s after boot). Stop `npm run dev` first; a second poller gets a Telegram 409.
-3. Live check against sandbox where the milestone touches PayPal (e.g. `npm run paypal:sanity`, or the runbook below).
+3. Live check against sandbox where the milestone touches PayPal or the agent (`npm run paypal:sanity`, `npm run agent:live`, or the webhook runbook below). `agent:live` seeds a throwaway group + real sandbox invoice, runs the real agent, checks guardrails, and cleans up (cancels the invoice). Groq free tier is 8k tokens/min: wait ~60s between agent runs.
 
 ## Runbook: live PayPal webhook test (tunnel + Webhooks Simulator)
 Use whenever a milestone changes `/webhook/paypal` handling. Do all the setup BEFORE asking the human to click, and give them everything in one message.

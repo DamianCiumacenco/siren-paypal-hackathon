@@ -4,24 +4,23 @@ import type { Config } from '../config.js';
 
 /**
  * Which PayPal toolkit actions Siren's agent may use. Anything not listed here
- * is never handed to the LLM (e.g. refunds, subscriptions, disputes).
+ * is never handed to the LLM. Deliberately excluded:
+ * - invoices.list: lists the WHOLE merchant account across every group, so the agent
+ *   could find (and act on) another group's invoices. Seen in the milestone-5 live run.
+ * - orders.*: splits are invoices only; orders are USD-only in the toolkit anyway.
+ * - refunds, subscriptions, disputes: out of scope.
  */
 export const PAYPAL_ACTIONS = {
-  invoices: { create: true, send: true, list: true, get: true, sendReminder: true, cancel: true },
-  orders: { create: true, get: true, capture: true },
+  invoices: { create: true, send: true, get: true, sendReminder: true, cancel: true },
 };
 
 /** Tool names the toolkit exposes for PAYPAL_ACTIONS (asserted in tests). */
 export const PAYPAL_TOOL_NAMES = [
   'create_invoice',
-  'list_invoices',
   'get_invoice',
   'send_invoice',
   'send_invoice_reminder',
   'cancel_sent_invoice',
-  'create_order',
-  'get_order',
-  'pay_order', // = orders.capture
 ] as const;
 
 export type PayPalToolName = (typeof PAYPAL_TOOL_NAMES)[number];
@@ -72,8 +71,11 @@ export function getPayPalTools(config: Pick<Config, 'PAYPAL_CLIENT_ID' | 'PAYPAL
  * Toolkit tools return a JSON string. On failure they do NOT throw — they return either
  * `{"error": {...}}` (client-side errors) or `{"ok": false, "status": 403, "code", "message"}`
  * (PayPal HTTP errors) — so callers must check. This parses and throws on either.
+ * Some PayPal calls (e.g. send_invoice_reminder) succeed with an empty 204 body, which the
+ * toolkit returns as `""` — that becomes `{}`.
  */
 export function parseToolkitResult<T = Record<string, unknown>>(result: unknown): T {
+  if (result === '' || result === '""') return {} as T;
   const parsed = (typeof result === 'string' ? JSON.parse(result) : result) as Record<string, unknown>;
   if (parsed && typeof parsed === 'object') {
     if ('error' in parsed) throw new Error(`PayPal toolkit error: ${JSON.stringify(parsed.error)}`);
