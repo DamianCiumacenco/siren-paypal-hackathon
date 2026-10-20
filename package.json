@@ -15,7 +15,8 @@
     "test": "vitest run",
     "db:push": "tsx scripts/db-push.ts",
     "db:check": "tsx scripts/db-check.ts",
-    "paypal:sanity": "tsx scripts/paypal-sanity.ts"
+    "paypal:sanity": "tsx scripts/paypal-sanity.ts",
+    "test:startup": "tsx scripts/startup-smoke.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.99",
