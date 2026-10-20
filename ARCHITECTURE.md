@@ -403,13 +403,13 @@ Command → runAgent
 
 Toolkit doesn't handle incoming webhooks — only outbound API calls. So:
 
-- `src/paypal/webhooks.ts` → signature verification via `POST /v1/notifications/verify-webhook-signature`
-- `src/routes/paypal.ts` → `POST /webhook/paypal`, verify → dispatch INVOICE.PAID / INVOICE.CANCELLED
+- `src/paypal/webhooks.ts` → PayPal **self-verification** (CRC32 of raw body + SHA256withRSA against the cert at `paypal-cert-url`, `*.paypal.com` only). Chosen over the `verify-webhook-signature` postback: no extra API call, and it is the only method that works for Webhook Simulator events (signed with webhook id `WEBHOOK_ID`, accepted only when `PAYPAL_WEBHOOK_ALLOW_SIMULATOR=true`).
+- `src/routes/paypal.ts` → `POST /webhook/paypal`, verify → dispatch `INVOICING.INVOICE.PAID` / `INVOICING.INVOICE.CANCELLED` (idempotent: repeat deliveries change 0 rows)
 
 Webhook subscription setup (manual, after Render deploys):
 1. Dev dashboard → Sandbox App → Add Webhook
 2. URL: `https://<render-url>/webhook/paypal`
-3. Events: `INVOICE.PAID`, `INVOICE.CANCELLED`
+3. Events: `Invoicing invoice paid` (`INVOICING.INVOICE.PAID`), `Invoicing invoice cancelled` (`INVOICING.INVOICE.CANCELLED`)
 4. Copy `webhook_id` → `.env` `PAYPAL_WEBHOOK_ID`
 
 ---

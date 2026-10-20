@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import type { UserFromGetMe } from 'grammy/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBot, telegramWebhookSecret } from '../src/bot/index.js';
-import { buildServer } from '../src/server.js';
+import type { InvoiceStore } from '../src/paypal/webhooks.js';
+import { acceptedWebhookIds, buildServer } from '../src/server.js';
+import { invoiceEvent, signedWebhookHeaders, TEST_CERT_PEM } from './helpers/paypal-signing.js';
 
 const TOKEN = '123456:TEST_TOKEN';
 const SECRET = telegramWebhookSecret(TOKEN);
@@ -42,15 +44,25 @@ function startUpdate(text: string) {
 describe('server', () => {
   let app: FastifyInstance;
   let apiCalls: { method: string; payload: Record<string, unknown> }[];
+  let paidInvoices: string[];
+  const WEBHOOK_ID = 'WH-REAL-123';
 
   beforeEach(async () => {
     apiCalls = [];
+    paidInvoices = [];
     const bot = createBot(TOKEN, { botInfo });
     bot.api.config.use(async (_prev, method, payload) => {
       apiCalls.push({ method, payload: payload as Record<string, unknown> });
       return { ok: true, result: true } as never;
     });
-    app = await buildServer({ bot, telegramSecret: SECRET });
+    const store: InvoiceStore = {
+      markInvoicePaid: async (id) => (paidInvoices.push(id), 1),
+      markInvoiceCancelled: async () => 0,
+    };
+    app = await buildServer({
+      telegram: { bot, secretToken: SECRET },
+      paypal: { webhookIds: [WEBHOOK_ID], store, fetchCertPem: async () => TEST_CERT_PEM },
+    });
   });
 
   afterEach(async () => {
@@ -96,5 +108,72 @@ describe('server', () => {
   it('webhook secret is deterministic and Telegram-safe', () => {
     expect(SECRET).toBe(telegramWebhookSecret(TOKEN));
     expect(SECRET).toMatch(/^[A-Za-z0-9_-]{1,256}$/);
+  });
+
+  describe('POST /webhook/paypal', () => {
+    const body = invoiceEvent('INVOICING.INVOICE.PAID', 'INV2-AAAA');
+    const post = (payload: string, headers: Record<string, string>) =>
+      app.inject({
+        method: 'POST',
+        url: '/webhook/paypal',
+        headers: { 'content-type': 'application/json', ...headers },
+        payload,
+      });
+
+    it('processes a correctly signed INVOICE.PAID event', async () => {
+      const res = await post(body, signedWebhookHeaders(body, WEBHOOK_ID));
+      expect(res.statusCode).toBe(200);
+      expect(paidInvoices).toEqual(['INV2-AAAA']);
+    });
+
+    it('rejects a bad signature with 400 and changes nothing', async () => {
+      const res = await post(body, signedWebhookHeaders(body, 'WH-SOMEONE-ELSE'));
+      expect(res.statusCode).toBe(400);
+      expect(paidInvoices).toEqual([]);
+    });
+
+    it('rejects a request with no signature headers', async () => {
+      const res = await post(body, {});
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('answers 503 when no webhook id is configured', async () => {
+      const bare = await buildServer({
+        paypal: { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } },
+      });
+      const res = await bare.inject({
+        method: 'POST',
+        url: '/webhook/paypal',
+        headers: { 'content-type': 'application/json', ...signedWebhookHeaders(body, WEBHOOK_ID) },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(503);
+      await bare.close();
+    });
+  });
+});
+
+describe('polling mode (no PUBLIC_URL)', () => {
+  it('does not mount the Telegram webhook route, so bot.start() still works', async () => {
+    const bot = createBot(TOKEN, { botInfo });
+    const app = await buildServer({
+      paypal: { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } },
+    });
+    const res = await app.inject({ method: 'POST', url: '/webhook/telegram', payload: {} });
+    expect(res.statusCode).toBe(404);
+    // grammy replaces bot.start with a throwing stub once webhookCallback is created.
+    expect(bot.start.toString()).not.toContain('already started the bot via webhooks');
+    await app.close();
+  });
+});
+
+describe('acceptedWebhookIds', () => {
+  it('only includes the simulator id when explicitly allowed', () => {
+    expect(acceptedWebhookIds({ PAYPAL_WEBHOOK_ID: 'WH-1', PAYPAL_WEBHOOK_ALLOW_SIMULATOR: false })).toEqual(['WH-1']);
+    expect(acceptedWebhookIds({ PAYPAL_WEBHOOK_ID: 'WH-1', PAYPAL_WEBHOOK_ALLOW_SIMULATOR: true })).toEqual([
+      'WH-1',
+      'WEBHOOK_ID',
+    ]);
+    expect(acceptedWebhookIds({ PAYPAL_WEBHOOK_ID: undefined, PAYPAL_WEBHOOK_ALLOW_SIMULATOR: false })).toEqual([]);
   });
 });

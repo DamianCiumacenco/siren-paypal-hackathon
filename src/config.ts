@@ -14,6 +14,12 @@ const envSchema = z.object({
   PAYPAL_CLIENT_SECRET: required,
   PAYPAL_MODE: z.literal('sandbox').default('sandbox'), // sandbox only — see SCOPE.md hard limits
   PAYPAL_WEBHOOK_ID: optional, // filled after Render deploy
+  // Accept Webhook Simulator events (signed with webhook id "WEBHOOK_ID"). Testing only:
+  // anyone can fire the simulator at our URL, so keep this off on the live deploy.
+  PAYPAL_WEBHOOK_ALLOW_SIMULATOR: z
+    .enum(['true', 'false', ''])
+    .optional()
+    .transform((v) => v === 'true'),
 
   // Telegram
   TELEGRAM_BOT_TOKEN: required,
