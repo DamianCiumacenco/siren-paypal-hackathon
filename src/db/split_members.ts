@@ -40,12 +40,13 @@ interface DmMemberRow {
   reminders_sent: number | null;
   user_id: number | null;
   payment_link: string | null;
+  last_reminded_at: string | null;
   splits: { group_id: number; description: string | null; per_person_amount: unknown; currency: string };
   users: { telegram_user_id: number } | null;
 }
 
 const MEMBER_SELECT =
-  'id, display_name, status, reminders_sent, user_id, payment_link, ' +
+  'id, display_name, status, reminders_sent, last_reminded_at, user_id, payment_link, ' +
   'splits!inner(group_id, description, per_person_amount, currency), users(telegram_user_id)';
 
 function toDmMember(row: DmMemberRow): DmMember {
@@ -56,6 +57,7 @@ function toDmMember(row: DmMemberRow): DmMember {
     remindersSent: row.reminders_sent ?? 0,
     userId: row.user_id,
     telegramUserId: row.users ? Number(row.users.telegram_user_id) : null,
+    lastRemindedAt: row.last_reminded_at,
     share: {
       amount: Number(row.splits.per_person_amount),
       currency: row.splits.currency,

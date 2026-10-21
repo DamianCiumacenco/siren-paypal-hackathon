@@ -134,6 +134,15 @@ describe('toGroupText (agent replies posted in the group)', () => {
     ).toBe('Jay owes €6 — invoice , split.\nPay: [pay link sent by DM]');
   });
 
+  it('drops tone / reliability labels about people (no group shaming)', () => {
+    expect(toGroupText('Reminded Sean (chill tone) and Jay (direct tone, reliability 0.3).')).toBe('Reminded Sean and Jay.');
+    expect(toGroupText('Reminded Sean (chill) and Jay (direct) about golf.')).toBe('Reminded Sean and Jay about golf.');
+    expect(toGroupText('Pizza (Domino’s) was great')).toBe('Pizza (Domino’s) was great');
+    expect(toGroupText('Sean was reminded 1 min ago (chill tone, typically pays within 5h) — follow-up in 4h.')).toBe(
+      'Sean was reminded 1 min ago — follow-up in 4h.',
+    );
+  });
+
   it('leaves normal text, amounts, times and other links alone', () => {
     const text = 'Jay paid €6.00 in 5 hours (2 of 3 paid). Details: https://example.com/x';
     expect(toGroupText(text)).toBe(text);

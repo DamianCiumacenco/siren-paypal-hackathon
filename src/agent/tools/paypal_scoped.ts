@@ -151,8 +151,16 @@ export function scopePayPalTools(paypal: ToolSet, deps: ScopedPayPalDeps): ToolS
         if (member.status === 'paid' || member.status === 'cancelled') {
           return { ok: false, error: `${member.displayName} is already ${member.status} — no reminder sent` };
         }
-        if (member.userId !== null) {
-          const last = await deps.store.lastReminderAt(member.userId);
+        // Members with no Telegram user have no user id to rate-limit by, so fall back to
+        // this member's own last reminder — otherwise a 5-minute cron could email them
+        // every pass.
+        {
+          const last =
+            member.userId !== null
+              ? await deps.store.lastReminderAt(member.userId)
+              : member.lastRemindedAt
+                ? new Date(member.lastRemindedAt)
+                : null;
           if (last && now().getTime() - last.getTime() < REMINDER_COOLDOWN_MS) {
             return {
               ok: false,

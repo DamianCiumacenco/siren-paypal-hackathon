@@ -2,6 +2,7 @@ import { APICallError, RetryError } from 'ai';
 import { InlineKeyboard } from 'grammy';
 import { findSplitProposal, type AgentOutput } from '../../agent/run.js';
 import type { AgentInput } from '../../agent/types.js';
+import { ChatLock } from '../../lib/chat-lock.js';
 import { toGroupText } from '../../lib/group-text.js';
 import { AllProvidersExhaustedError } from '../../llm/failover.js';
 import { LongRateLimitError } from '../../llm/rate-limit.js';
@@ -16,6 +17,8 @@ export interface MessageHandlerDeps {
    * at 10s), so the run happens in the background. Tests pass a collector to await it.
    */
   background?: (work: Promise<void>) => void;
+  /** Shared with the scheduler: one agent run per group at a time. */
+  lock?: ChatLock;
 }
 
 /** Commands that go to the agent. /start and /help are answered directly. */
@@ -93,7 +96,7 @@ export function splitCard(
 }
 
 export function createAgentMessageHandler(deps: MessageHandlerDeps) {
-  const busy = new Set<number>(); // one agent run per chat at a time
+  const lock = deps.lock ?? new ChatLock();
   const background = deps.background ?? ((p) => void p);
 
   return async (ctx: SirenContext, prompt: string): Promise<void> => {
@@ -103,11 +106,10 @@ export function createAgentMessageHandler(deps: MessageHandlerDeps) {
       await ctx.reply('I work in group chats — add me to a group and use /split there.');
       return;
     }
-    if (busy.has(chatId)) {
+    if (!lock.tryAcquire(chatId)) {
       await ctx.reply('Still working on the last request — give me a few seconds.');
       return;
     }
-    busy.add(chatId);
     const sender = {
       telegramUserId: ctx.from.id,
       firstName: ctx.from.first_name,
@@ -132,7 +134,7 @@ export function createAgentMessageHandler(deps: MessageHandlerDeps) {
           logError(deps.log, err, 'agent run failed', { chatId, updateId: ctx.update.update_id });
           await ctx.reply(failureMessage(err)).catch(() => {});
         } finally {
-          busy.delete(chatId);
+          lock.release(chatId);
         }
       })(),
     );

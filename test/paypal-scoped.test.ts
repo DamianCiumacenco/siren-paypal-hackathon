@@ -144,4 +144,12 @@ describe('scoped PayPal tools', () => {
     });
     expect(JSON.stringify(res).length).toBeLessThan(300);
   });
+
+  it('members with no Telegram user are rate-limited by their own last reminder (no 5-minute email spam)', async () => {
+    const unlinked = { ...jay, userId: null, telegramUserId: null, lastRemindedAt: new Date(NOW.getTime() - 3_600_000).toISOString() };
+    const { run, calls } = setup({ member: unlinked });
+    const res = await run('send_invoice_reminder', { invoice_id: 'INV2-JAY' });
+    expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/rate limited/) });
+    expect(calls).toEqual([]);
+  });
 });

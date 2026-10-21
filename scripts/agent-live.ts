@@ -2,7 +2,7 @@
 // throwaway group that is deleted at the end (every invoice it created is cancelled).
 //
 //   npm run agent:live                      # both scenarios, DMs are dry runs (printed, not sent)
-//   npm run agent:live -- --scenario split  # split | nag | memory | tones | payment
+//   npm run agent:live -- --scenario split  # split | nag | memory | tones | payment | scheduler
 //   npm run agent:live -- --dm <telegramId> # really DM that Telegram user (must have /start-ed the bot)
 //   npm run agent:live -- --only gemini     # run the agent on one provider (groq | gemini | nvidia)
 //   npm run agent:live -- --switch-after 1  # bench Groq after N LLM calls (simulates its daily cap mid-run)
@@ -21,8 +21,12 @@ import { createMemoryStore } from '../src/db/memory.js';
 import { createPaymentStore } from '../src/db/payments.js';
 import { createInvoiceStore } from '../src/db/split_members.js';
 import { formatWhy } from '../src/bot/handlers/why.js';
+import { toGroupText } from '../src/lib/group-text.js';
 import { handleInvoicePaid } from '../src/memory/on-payment.js';
 import { dispatchWebhookEvent } from '../src/paypal/webhooks.js';
+import { createSchedulerStore } from '../src/db/scheduler.js';
+import { ChatLock } from '../src/lib/chat-lock.js';
+import { runScheduledPass } from '../src/scheduler/runner.js';
 import { createSplitStore } from '../src/db/splits.js';
 import { safeErrorMessage, type Logger } from '../src/lib/safe-error.js';
 import { FailoverModel } from '../src/llm/failover.js';
@@ -116,6 +120,15 @@ function printRun(out: AgentOutput, seconds: number) {
   console.log(`  Group reply: ${out.response}\n`);
 }
 
+/**
+ * In a full run every scenario shares group A. Real splits each get a fresh context, so
+ * close the previous scenario's open splits before the next one starts — otherwise later
+ * scenarios see 3–4 unrelated open splits and the agent's choices drift.
+ */
+async function freshGroup() {
+  if (groupId !== undefined) await db.from('splits').update({ status: 'settled' }).eq('group_id', groupId).eq('status', 'open');
+}
+
 async function agent(input: AgentInput) {
   const started = Date.now();
   const out = await runAgent(input, {
@@ -129,6 +142,7 @@ async function agent(input: AgentInput) {
 }
 
 let groupId: number | undefined;
+let groupB: number | undefined;
 const userIds: number[] = [];
 try {
   // --- seed: group with Damian (sender) and Jay as known members ----------------
@@ -219,6 +233,7 @@ try {
 
   // --- scenario: nag (scheduled run on an open split Jay hasn't paid) ------------
   if (scenario === 'all' || scenario === 'nag') {
+    await freshGroup();
     console.log('=== nag: scheduled run, Jay unpaid for 50h, last reminded 30h ago');
     const created = await executeToolkit<{ id?: string; href?: string }>(paypal.create_invoice!, {
       currency_code: 'EUR',
@@ -277,9 +292,13 @@ try {
       await db.from('split_members').select('reminders_sent').eq('id', jayMember.id).single(),
       'read jay',
     );
+    const decision = out.thoughts.flatMap((t) => t.toolCalls.map((c) => c.tool)).filter((t) => t !== 'get_member_profile' && t !== 'fetch_group_history');
+    console.log(`  (decision) tools used: ${decision.join(', ') || 'none'} | ${out.thoughts.map((t) => t.model).join(' > ')}`);
+    // Nudging is expected for an overdue, unreliable member; deliberately deferring with
+    // schedule_followup is also a legitimate autonomous decision. Doing nothing is not.
     check(
-      'agent nudged Jay (telegram_dm or PayPal reminder)',
-      out.thoughts.some((t) => t.toolCalls.some((c) => c.tool === 'telegram_dm' || c.tool === 'send_invoice_reminder')),
+      'agent decided: nudged Jay, or deliberately scheduled a follow-up',
+      decision.some((t) => t === 'telegram_dm' || t === 'send_invoice_reminder' || t === 'schedule_followup'),
     );
     check('any DM to Jay contains his real pay link', dms.every((d) => d.text.includes(payLink)));
     check("group reply doesn't repeat the DM or expose Jay's pay link", !out.response.includes(payLink) && !dms.some((d) => out.response.includes(d.text)));
@@ -304,6 +323,7 @@ try {
       console.log('\n(waiting 60s for the Groq tokens-per-minute window)\n');
       await new Promise((r) => setTimeout(r, 60_000));
     }
+    await freshGroup();
     // Jay: a reliable payer with history, so "about" has something real to say.
     await db
       .from('user_memory')
@@ -337,7 +357,8 @@ try {
     check('about: used get_member_profile', used(about, 'get_member_profile'));
     check('about: reply cites the learned profile (0.94 / 94% / 25th)', /0\.94|94\s?%|25th/.test(about.response));
     console.log(`  full about reply:\n${about.response.split('\n').map((l) => `  | ${l}`).join('\n')}`);
-    check('about: no internal ids shown', !/user[ _]?(id)?\s*:?\s*\d|split_member_id|[0-9a-f]{8}-[0-9a-f]{4}-/i.test(about.response));
+    // What the group actually sees is the sanitised text (toGroupText), not the raw model output.
+    check('about: no internal ids in what the group sees', !/user[ _]?(id)?\s*:?\s*\d|split_member_id|[0-9a-f]{8}-[0-9a-f]{4}-/i.test(toGroupText(about.response)));
     await new Promise((r) => setTimeout(r, 25_000));
 
     console.log('=== memory: /siren tone direct (from Damian)');
@@ -374,6 +395,7 @@ try {
       console.log('\n(waiting 60s for the Groq tokens-per-minute window)\n');
       await new Promise((r) => setTimeout(r, 60_000));
     }
+    await freshGroup();
     console.log('=== tones: scheduled run, Jay (direct, 0.3) and Sean (chill, 0.94) both unpaid 50h');
     // Earlier scenarios (memory) change Jay's profile; reset both so the tones differ by design.
     await db.from('user_memory').update({ reliability_score: 0.3, preferred_tone: 'direct', avg_hours_to_pay: 90, notes: null }).eq('user_id', jayId).eq('group_id', groupId);
@@ -476,9 +498,111 @@ try {
     check('payment: last payment settles the split + 🎉 post', settled.status === 'settled' && posts[1]?.includes('is settled') === true);
   }
 
+  // --- scenario: scheduler (Flow C, fired manually) --------------------------------
+  let schedulerRuns = 0;
+  if (scenario === 'all' || scenario === 'scheduler') {
+    if (scenario === 'all') {
+      console.log('\n(waiting 60s for the LLM tokens-per-minute window)\n');
+      await new Promise((r) => setTimeout(r, 60_000));
+    }
+    await freshGroup();
+    console.log('=== scheduler: two groups, pass fired manually');
+    // Earlier scenarios in a full run reminded Jay/Sean minutes ago; the real per-user 24h
+    // cap would then (correctly) refuse. Simulate a day passing, as the tones scenario does.
+    for (const uid of [jayId, seanId]) {
+      await db.from('split_members').update({ last_reminded_at: new Date(Date.now() - 30 * 3_600_000).toISOString() }).eq('user_id', uid).not('last_reminded_at', 'is', null);
+    }
+    const schedulerStartedAt = new Date().toISOString();
+    // Group A (the seeded group): golf, 50h old — Jay never reminded, Sean reminded 2h ago.
+    await db.from('user_memory').update({ reliability_score: 0.3, preferred_tone: 'direct', tone_locked: true }).eq('user_id', jayId).eq('group_id', groupId);
+    await db.from('user_memory').update({ reliability_score: 0.94, preferred_tone: 'chill', tone_locked: true }).eq('user_id', seanId).eq('group_id', groupId);
+    const golf = must<{ id: string }>(
+      await db.from('splits').insert({ group_id: groupId, creator_user_id: damianId, description: 'sched golf', total_amount: 30, per_person_amount: 10, currency: 'EUR', status: 'open', created_at: new Date(Date.now() - 50 * 3_600_000).toISOString() }).select('id').single(),
+      'insert sched split',
+    );
+    const invoiceFor = async (name: string) => {
+      const c = await executeToolkit<{ id?: string; href?: string }>(paypal.create_invoice!, {
+        currency_code: 'EUR', note: 'Siren agent live test — will be cancelled',
+        primary_recipients: [{ billing_info: { name: { given_name: name } } }],
+        items: [{ name: 'sched', quantity: '1', unit_amount: { currency_code: 'EUR', value: '10.00' } }],
+      });
+      const inv = c.id ?? c.href!.split('/').pop()!;
+      createdInvoices.add(inv);
+      return { inv, link: (await executeToolkit<{ href: string }>(paypal.send_invoice!, { invoice_id: inv, send_to_recipient: false })).href };
+    };
+    const jayInv = await invoiceFor('Jay');
+    const seanInv = await invoiceFor('Sean');
+    await db.from('split_members').insert([
+      { split_id: golf.id, user_id: jayId, display_name: 'Jay', status: 'sent', paypal_invoice_id: jayInv.inv, payment_link: jayInv.link },
+      { split_id: golf.id, user_id: seanId, display_name: 'Sean', status: 'sent', reminders_sent: 1, last_reminded_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), paypal_invoice_id: seanInv.inv, payment_link: seanInv.link },
+    ]);
+    // Group A, second split: the agent already scheduled a follow-up for later → must be skipped.
+    const later = must<{ id: string }>(
+      await db.from('splits').insert({ group_id: groupId, creator_user_id: damianId, description: 'sched later', total_amount: 10, per_person_amount: 5, currency: 'EUR', status: 'open', next_nag_at: new Date(Date.now() + 5 * 3_600_000).toISOString() }).select('id').single(),
+      'insert later split',
+    );
+    await db.from('split_members').insert({ split_id: later.id, user_id: jayId, display_name: 'Jay', status: 'sent' });
+    // Group B: Mike owes there. A's run must never touch him; B's run must never touch Jay/Sean.
+    groupB = must<{ id: number }>(await db.from('groups').insert({ telegram_chat_id: FAKE_CHAT_ID - 1, chat_title: 'Siren live test B' }).select('id').single(), 'insert group B').id;
+    const MIKE_TG = 999_400_000 + rand();
+    const mikeId = must<{ id: number }>(await db.from('users').insert({ telegram_user_id: MIKE_TG, first_name: 'Mike' }).select('id').single(), 'insert Mike').id;
+    userIds.push(mikeId);
+    await db.from('user_memory').insert({ user_id: mikeId, group_id: groupB, reliability_score: 0.6, preferred_tone: 'neutral' });
+    const mikeInv = await invoiceFor('Mike');
+    const bSplit = must<{ id: string }>(
+      await db.from('splits').insert({ group_id: groupB, creator_user_id: mikeId, description: 'sched bowling', total_amount: 20, per_person_amount: 10, currency: 'EUR', status: 'open', created_at: new Date(Date.now() - 80 * 3_600_000).toISOString() }).select('id').single(),
+      'insert B split',
+    );
+    await db.from('split_members').insert({ split_id: bSplit.id, user_id: mikeId, display_name: 'Mike', status: 'sent', paypal_invoice_id: mikeInv.inv, payment_link: mikeInv.link });
+
+    const posts: { chat: number; text: string }[] = [];
+    const dmsByRun: { group: number; to: number[] }[] = [];
+    const schedulerDeps = {
+      store: createSchedulerStore(db),
+      memory: createMemoryStore(db),
+      runAgent: async (input: AgentInput) => {
+        const before = sent.length;
+        const out = await agent(input);
+        dmsByRun.push({ group: input.context.groupId, to: sent.slice(before).map((d) => d.to) });
+        if (input.context.groupId === groupId) schedulerRuns++;
+        return out;
+      },
+      postToGroup: async (chat: number, text: string) => void posts.push({ chat, text }),
+      lock: new ChatLock(),
+      log,
+      groupIds: [groupId, groupB],
+    };
+
+    console.log('--- pass 1');
+    const sentBefore = sent.length;
+    const pass1 = await runScheduledPass(schedulerDeps);
+    console.log(`  pass 1: ${JSON.stringify(pass1)}`);
+    for (const p of posts) console.log(`  group post → ${p.chat === FAKE_CHAT_ID ? 'A' : 'B'}: ${p.text.replace(/\n/g, ' | ')}`);
+    const dms = sent.slice(sentBefore);
+    check('scheduler: agent ran for the 2 eligible splits, skipped the scheduled follow-up (no LLM)', pass1.agentRuns === 2 && pass1.skipped.followup_scheduled === 1);
+    check('scheduler: autonomously reminded Jay (overdue, never reminded)', dms.some((d) => d.to === JAY_TG));
+    check('scheduler: Sean NOT reminded (reminded 2h ago — 24h cap)', !dms.some((d) => d.to === SEAN_TG));
+    check("scheduler: group isolation — A's run only DMed A members, B's only B's", dmsByRun.every((r) => r.to.every((to) => (r.group === groupB ? to === MIKE_TG : to !== MIKE_TG))));
+    check('scheduler: Mike reminded by group B\'s run', dmsByRun.some((r) => r.group === groupB && r.to.includes(MIKE_TG)));
+    const triggers = must<{ trigger: string }[]>(
+      await db.from('reasoning_log').select('trigger').in('group_id', [groupId, groupB]).eq('trigger', 'scheduled_run').gte('created_at', schedulerStartedAt),
+      'read triggers',
+    );
+    check("scheduler: both runs logged with trigger 'scheduled_run'", triggers.length === 2);
+    check('scheduler: group posts are sanitised (no pay links / ids)', posts.length > 0 && posts.every((p) => !/https?:|INV2-|[0-9a-f]{8}-[0-9a-f]{4}-/.test(p.text)));
+    const whyA = formatWhy(await lastReasoningLog(db, groupId));
+    console.log(whyA.split('\n').slice(0, 4).map((l) => `  | ${l}`).join('\n'));
+    check('scheduler: /siren why says it was a scheduled check (autonomous)', whyA.startsWith('My last decision (scheduled check'));
+
+    console.log('--- pass 2 (immediately after)');
+    const pass2 = await runScheduledPass(schedulerDeps);
+    console.log(`  pass 2: ${JSON.stringify(pass2)}`);
+    check('scheduler: pass 2 makes zero LLM calls (everyone reminded <24h / follow-up pending)', pass2.agentRuns === 0 && sent.length === sentBefore + dms.length);
+  }
+
   const logs = must<unknown[]>(await db.from('reasoning_log').select('id').eq('group_id', groupId), 'read log');
   const expectedRuns =
-    (scenario === 'all' ? 2 : scenario === 'split' || scenario === 'nag' ? 1 : 0) + memoryRuns + tonesRuns;
+    (scenario === 'all' ? 2 : scenario === 'split' || scenario === 'nag' ? 1 : 0) + memoryRuns + tonesRuns + schedulerRuns;
   check('every agent run persisted to reasoning_log', logs.length === expectedRuns);
 } catch (err) {
   console.error(`\nLive run failed: ${safeErrorMessage(err)}`);
@@ -486,6 +610,7 @@ try {
 } finally {
   // --- clean up: group delete cascades to splits, members, memory, reasoning_log ----
   if (groupId !== undefined) await db.from('groups').delete().eq('id', groupId);
+  if (groupB !== undefined) await db.from('groups').delete().eq('id', groupB);
   for (const id of userIds) await db.from('users').delete().eq('id', id);
   for (const id of createdInvoices) {
     await executeToolkit(paypal.cancel_sent_invoice!, {

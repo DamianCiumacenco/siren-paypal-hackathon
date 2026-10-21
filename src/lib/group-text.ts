@@ -5,6 +5,8 @@
  * - Markdown stripped (we send plain text; Telegram would show ** and # literally)
  * - pay links → "[pay link sent by DM]" (links belong in private DMs)
  * - invoice numbers, uuids and "user_id N"-style labels removed
+ * - tone/reliability labels like "(direct tone)" removed: naming someone's reminder tone
+ *   in the group is mild shaming (seen live, mostly from the NVIDIA fallback model)
  */
 export function plainText(text: string): string {
   return text
@@ -21,6 +23,7 @@ export function toGroupText(text: string): string {
     .replace(/\bINV2-[A-Z0-9-]+/g, '')
     .replace(/\s*[([]?\b(split_member_id|user_id|split_id|invoice_id|user)\s*[:=#]?\s*[0-9a-f-]*\d[0-9a-f-]*[)\]]?/gi, '')
     .replace(/\s*[([]?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[)\]]?/gi, '')
+    .replace(/\s*\((?:\s*(?:chill|neutral|direct)\s*|[^()]*\b(?:chill|neutral|direct) tone[^()]*|[^()]*reliab[^()]*)\)/gi, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();

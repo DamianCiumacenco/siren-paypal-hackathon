@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { validate as isValidCron } from 'node-cron';
 import { z } from 'zod';
 
 // Empty strings in .env files (e.g. `PAYPAL_WEBHOOK_ID=`) should count as "not set".
@@ -41,6 +42,13 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: optional,
   SUPABASE_SERVICE_KEY: required,
   SUPABASE_DB_URL: optional, // only used by `npm run db:push`
+
+  // Autonomous scheduler (milestone 11). Prod: every 6h. Demo/mates test: '*/5 * * * *'.
+  NAG_CRON_INTERVAL: z
+    .string()
+    .trim()
+    .default('0 */6 * * *')
+    .refine((v) => isValidCron(v), 'is not a valid cron expression (e.g. "0 */6 * * *")'),
 
   // App
   PORT: z.coerce.number().int().positive().default(3000),

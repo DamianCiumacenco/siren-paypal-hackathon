@@ -13,6 +13,8 @@ export interface DmMember {
   remindersSent: number;
   userId: number | null;
   telegramUserId: number | null;
+  /** This split_member's own last reminder (rate limit for members with no Telegram user). */
+  lastRemindedAt?: string | null;
   /** From the DB — the DM states these, never the model's version of them. */
   share?: { amount: number; currency: string; description: string; paymentLink: string | null };
 }

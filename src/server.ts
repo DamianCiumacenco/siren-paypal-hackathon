@@ -8,6 +8,9 @@ import { runAgent } from './agent/run.js';
 import { createChatRegistry } from './db/chats.js';
 import { createMemoryStore } from './db/memory.js';
 import { createPaymentStore } from './db/payments.js';
+import { createSchedulerStore } from './db/scheduler.js';
+import { ChatLock } from './lib/chat-lock.js';
+import { runScheduledPass, startScheduler } from './scheduler/runner.js';
 import { lastReasoningLog } from './db/reasoning_log.js';
 import { createInvoiceStore } from './db/split_members.js';
 import { createSplitStore } from './db/splits.js';
@@ -60,10 +63,12 @@ async function main(): Promise<void> {
   };
 
   setLlmLogger(log);
+  const lock = new ChatLock(); // shared by user messages and the scheduler
   const splits = createSplitStore(db);
   const paypalTools = getPayPalTools(config);
   const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {
     registry: createChatRegistry(db),
+    lock,
     lastReasoning: (groupId) => lastReasoningLog(db, groupId),
     runAgent: (input) => runAgent(input),
     splits,
@@ -111,7 +116,25 @@ async function main(): Promise<void> {
     });
   }
 
+  // Autonomous nag flow (Flow C): the agent checks open splits on NAG_CRON_INTERVAL.
+  const schedulerStore = createSchedulerStore(db);
+  const memory = createMemoryStore(db);
+  const scheduler = startScheduler(
+    config.NAG_CRON_INTERVAL,
+    () =>
+      runScheduledPass({
+        store: schedulerStore,
+        memory,
+        runAgent: (input) => runAgent(input),
+        postToGroup: async (chatId, text) => void (await bot.api.sendMessage(chatId, text)),
+        lock,
+        log,
+      }),
+    log,
+  );
+
   const shutdown = async () => {
+    await scheduler.stop();
     if (bot.isRunning()) await bot.stop();
     await app?.close();
     process.exit(0);

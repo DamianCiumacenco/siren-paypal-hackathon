@@ -309,31 +309,17 @@ Group context (injected per call):
 
 ---
 
-## Autonomous scheduler (`src/scheduler/runner.ts`)
+## Autonomous scheduler (`src/scheduler/runner.ts`, milestone 11)
 
-```typescript
-import cron from 'node-cron';
-import { runAgent } from '../agent/run';
-import { db } from '../db/client';
+`NAG_CRON_INTERVAL` (default `0 */6 * * *`; `*/5 * * * *` for a live demo), node-cron with `noOverlap`.
+Each pass, per open split (oldest first):
+1. Recompute memory for unpaid linked members (deterministic: overdue shares lower reliability).
+2. Skip WITHOUT an LLM call if: the agent scheduled a later follow-up (`next_nag_at`), every unpaid member was reminded <24h ago, or the group is busy (shared `ChatLock` with user messages).
+3. Otherwise `runAgent({ trigger: 'scheduled_run', … split_id … })`. Agent decides: remind in tone, check in, wait (`schedule_followup`), or nothing. No sender → no `send_split_invoices`.
+4. Post the (sanitised) summary to the group only if it actually reminded someone; quiet decisions live in `reasoning_log` (`/siren why` → "scheduled check").
+5. All LLM providers out of quota → stop the pass, log, no group message. Other errors → log (safe), continue with the next split.
 
-cron.schedule('0 */6 * * *', async () => {
-  const openSplits = await db.splits.findOpen();
-  for (const split of openSplits) {
-    const unpaid = await db.splitMembers.findUnpaid(split.id);
-    if (unpaid.length === 0) continue;
-
-    await runAgent({
-      trigger: 'scheduled_run',
-      userMessage: `[internal] Split "${split.description}" has ${unpaid.length} unpaid members. Decide what to do.`,
-      context: { groupId: split.group_id, splitId: split.id }
-    });
-  }
-});
-```
-
-Agent decides: nag, check-in, wait, or do nothing. Reasoning persisted regardless. **This is the autonomy claim.**
-
----
+The 24h cap, group isolation and paid-member protection are enforced in the tools, so they hold identically for scheduled runs. Members without Telegram are rate-limited by their own `last_reminded_at` (PayPal reminder emails).
 
 ## Memory logic (unchanged from v2)
 
