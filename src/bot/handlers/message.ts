@@ -3,6 +3,7 @@ import { InlineKeyboard } from 'grammy';
 import { findSplitProposal, type AgentOutput } from '../../agent/run.js';
 import type { AgentInput } from '../../agent/types.js';
 import { toGroupText } from '../../lib/group-text.js';
+import { AllProvidersExhaustedError } from '../../llm/failover.js';
 import { LongRateLimitError } from '../../llm/rate-limit.js';
 import { logError, type Logger } from '../../lib/safe-error.js';
 import type { SirenContext } from '../context.js';
@@ -46,9 +47,15 @@ export function agentPrompt(ctx: SirenContext): string | undefined {
 /** User-facing message for an agent failure (never the raw error). */
 export function failureMessage(err: unknown): string {
   const e = RetryError.isInstance(err) ? err.lastError : err;
+  const when = (ms: number) => {
+    const mins = Math.max(1, Math.ceil(ms / 60_000));
+    return mins >= 90 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`;
+  };
+  if (e instanceof AllProvidersExhaustedError) {
+    return `My AI quota is used up on every provider I can use (Groq, Gemini and NVIDIA free tiers). Try again in about ${when(e.retryInMs)}.`;
+  }
   if (e instanceof LongRateLimitError) {
-    const mins = Math.ceil(e.waitMs / 60_000);
-    return `I've used up my AI quota for now (free plan daily limit). Try again in about ${mins >= 90 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`}.`;
+    return `I've used up my AI quota for now (free plan daily limit). Try again in about ${when(e.waitMs)}.`;
   }
   if (APICallError.isInstance(e) && e.statusCode === 429) return "I'm over my AI rate limit right now — try again in a minute.";
   return 'Sorry, something went wrong on my side. Try again in a minute.';

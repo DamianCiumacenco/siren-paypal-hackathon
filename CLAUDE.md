@@ -31,7 +31,7 @@ Project: autonomous PayPal payment agent on Telegram. PayPal AI Hackathon 2026 s
 1. `npm run typecheck && npm test`: unit/route tests (app built with `app.inject()`, no network).
 2. `npm run test:startup`: boots the REAL server for 15s with `.env.local` and asserts it stays up, `/health` answers, and SIGTERM exits cleanly. `inject()` tests can't catch startup crashes (milestone 4: a grammy webhook/polling clash killed the server ~10s after boot). Stop `npm run dev` first; a second poller gets a Telegram 409.
 3. `npm run test:pii`: log output must contain no member names, amounts or message text (hard rule below).
-4. Live check against sandbox where the milestone touches PayPal or the agent (`npm run paypal:sanity`, `npm run agent:live`, or the webhook runbook below). `agent:live` seeds a throwaway group + real sandbox invoice, runs the real agent, checks guardrails, and cleans up (cancels the invoice). Groq free tier: 8k tokens/MINUTE (wait ~60s between agent runs) and 200k tokens/DAY, rolling 24h. A full `agent:live` costs ~90k tokens, so run single scenarios (`--scenario …`) unless a full pass is needed, and never right before a human test session. The payment scenario uses no LLM.
+4. Live check against sandbox where the milestone touches PayPal or the agent (`npm run paypal:sanity`, `npm run agent:live`, or the webhook runbook below). `agent:live` seeds a throwaway group + real sandbox invoice, runs the real agent, checks guardrails, and cleans up (cancels the invoice). Groq free tier: 8k tokens/MINUTE (wait ~60s between agent runs) and 200k tokens/DAY, rolling 24h. A full `agent:live` costs ~90k tokens (it fails over to Gemini/NVIDIA if Groq runs out), so run single scenarios (`--scenario …`) unless a full pass is needed. `--only groq|gemini|nvidia` proves one provider; `--switch-after N` simulates Groq's daily cap mid-run. The payment scenario uses no LLM.
 
 ## Runbook: live PayPal webhook test (tunnel + Webhooks Simulator)
 Use whenever a milestone changes `/webhook/paypal` handling. Do all the setup BEFORE asking the human to click, and give them everything in one message.
@@ -69,7 +69,7 @@ For Damian + 3 mates ("Jay", "Sean", "Mike"). Uses the sandbox, so no real money
 11. `/siren why` (shows the last decision's real steps, redacted), `/siren tone chill` (Sean), `/siren about Mike`, `/nag` → reminders respect each person's tone, max 1 per person per 24h (a second `/nag` is refused).
 12. `/split €10 test with Jay` → ❌ Cancel → nothing is sent.
 
-**Groq budget:** free tier = 200k tokens/day (rolling); each agent reply costs ~6–9k, so ~25 agent replies per day. Don't run `agent:live` the same day. Deterministic paths (✅ send, payment posts, `/siren why`) use no LLM. When the daily cap hits, Siren replies "used up my AI quota … try again in about N minutes".
+**LLM budget:** Groq free tier = 200k tokens/day (rolling), ~25 agent replies. When it runs out, Siren fails over to Gemini, then NVIDIA NIM (logged as `LLM provider quota exhausted — failing over`). Only if all three are out does it reply "AI quota is used up on every provider". Deterministic paths (✅ send, payment posts, `/siren why`) use no LLM.
 
 **Watch for** (terminal running `npm run dev`): errors show ids only, never names or message text. Anything else is a `test:pii` bug, so note the update id. Groq free tier = 8k tokens/min: if Siren says it's over its rate limit, wait a minute.
 

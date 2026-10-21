@@ -26,9 +26,15 @@ const envSchema = z.object({
 
   // LLM
   GROQ_API_KEY: required,
-  GOOGLE_GENERATIVE_AI_API_KEY: optional, // Gemini fallback, wired in milestone 12
-  LLM_PROVIDER: z.enum(['groq', 'google']).default('groq'),
-  LLM_MODEL: z.string().trim().min(1).default('openai/gpt-oss-120b'),
+  // Failover chain: Groq → Gemini → NVIDIA NIM (src/llm/). Fallbacks are skipped if no key.
+  LLM_PROVIDER: z.enum(['groq', 'google']).default('groq'), // where the chain starts
+  LLM_MODEL: z.string().trim().min(1).default('openai/gpt-oss-120b'), // Groq model
+  GOOGLE_GENERATIVE_AI_API_KEY: optional,
+  // gemini-2.5-flash is closed to new users; 3.7/3.8 were overloaded (503) when tested.
+  GEMINI_MODEL: z.string().trim().min(1).default('gemini-3.5-flash'),
+  NVIDIA_API_KEY: optional,
+  // nemotron-3-super-120b-a12b is listed but "not found for account" on the free dev key.
+  NVIDIA_MODEL: z.string().trim().min(1).default('nvidia/nemotron-3-ultra-550b-a55b'),
 
   // Supabase
   SUPABASE_URL: z.url({ error: 'is missing or not a valid URL' }),

@@ -31,7 +31,9 @@ Damian will tell you what to do. It'll be things like:
   - `/siren about <someone>`
   - `/siren tone chill` (or `neutral` / `direct`): how you'd like to be reminded
 
-**If something looks off** (a wrong amount, a DM you didn't expect, a link meant for someone else, or Siren saying it's "over its rate limit"), screenshot it and send it to Damian. That's exactly what we're looking for. The rate-limit message is normal on our free AI plan: just wait a minute.
+**If something looks off** (a wrong amount, a DM you didn't expect, a link meant for someone else, or an error message from Siren), screenshot it and send it to Damian. That's exactly what we're looking for.
+
+Running on free tiers Groq → Gemini → NVIDIA auto-failover, no rate concerns. (If Siren ever says its "AI quota is used up on every provider", all three ran out at once, which is very unlikely; tell Damian.)
 
 ## Privacy
 - Siren stores your Telegram first name and username, plus your test payments, in our test database.
@@ -45,4 +47,4 @@ Damian will tell you what to do. It'll be things like:
 - **Sandbox logins:** send each mate a different sandbox Personal account (SETUP.md §1.5).
 - **"Paid" updates:** these need the PayPal webhook → tunnel step (runbook step 4). Without it, payments still go through in the sandbox, but the group never shows "✅ paid".
 - **One bot only:** only one copy of the bot can run at a time (no Render deploy during the test).
-- **AI quota:** the Groq free tier allows ~25 agent replies per day (200k tokens, rolling). Plan the script around that; ✅ taps, payment posts and `/siren why` don't use it.
+- **AI quota:** Groq (~25 agent replies/day on the free tier) → Gemini → NVIDIA NIM fail over automatically, and the switch is logged as `LLM provider quota exhausted — failing over`. ✅ taps, payment posts and `/siren why` use no LLM at all.

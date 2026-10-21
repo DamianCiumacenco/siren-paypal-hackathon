@@ -2,7 +2,7 @@
   "name": "siren",
   "version": "0.1.0",
   "private": true,
-  "description": "Autonomous PayPal payment agent on Telegram \u2014 built on the PayPal Agent Toolkit",
+  "description": "Autonomous PayPal payment agent on Telegram — built on the PayPal Agent Toolkit",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -24,6 +24,8 @@
   "dependencies": {
     "@ai-sdk/google": "4.0.99",
     "@ai-sdk/groq": "4.0.63",
+    "@ai-sdk/openai": "4.0.99",
+    "@ai-sdk/provider": "4.0.29",
     "@paypal/agent-toolkit": "1.11.0",
     "@supabase/supabase-js": "2.118.0",
     "ai": "7.0.143",

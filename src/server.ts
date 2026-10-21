@@ -12,6 +12,7 @@ import { lastReasoningLog } from './db/reasoning_log.js';
 import { createInvoiceStore } from './db/split_members.js';
 import { createSplitStore } from './db/splits.js';
 import { logError, safeErrorMessage, type Logger } from './lib/safe-error.js';
+import { setLlmLogger } from './llm/providers.js';
 import { handleInvoicePaid } from './memory/on-payment.js';
 import { sendSplitInvoices } from './paypal/split_invoices.js';
 import { getPayPalTools } from './paypal/toolkit.js';
@@ -58,6 +59,7 @@ async function main(): Promise<void> {
     error: (o, m) => app?.log.error(o, m),
   };
 
+  setLlmLogger(log);
   const splits = createSplitStore(db);
   const paypalTools = getPayPalTools(config);
   const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {

@@ -4,6 +4,8 @@
 //   npm run agent:live                      # both scenarios, DMs are dry runs (printed, not sent)
 //   npm run agent:live -- --scenario split  # split | nag | memory | tones | payment
 //   npm run agent:live -- --dm <telegramId> # really DM that Telegram user (must have /start-ed the bot)
+//   npm run agent:live -- --only gemini     # run the agent on one provider (groq | gemini | nvidia)
+//   npm run agent:live -- --switch-after 1  # bench Groq after N LLM calls (simulates its daily cap mid-run)
 //
 // Groq free tier = 8k tokens/min: the script waits between scenarios.
 import { Api } from 'grammy';
@@ -23,7 +25,9 @@ import { handleInvoicePaid } from '../src/memory/on-payment.js';
 import { dispatchWebhookEvent } from '../src/paypal/webhooks.js';
 import { createSplitStore } from '../src/db/splits.js';
 import { safeErrorMessage, type Logger } from '../src/lib/safe-error.js';
-import { getModel } from '../src/llm/providers.js';
+import { FailoverModel } from '../src/llm/failover.js';
+import { providerSlots } from '../src/llm/providers.js';
+import { LongRateLimitError } from '../src/llm/rate-limit.js';
 import { formatSendSummary, sendSplitInvoices } from '../src/paypal/split_invoices.js';
 import { executeToolkit, getPayPalTools } from '../src/paypal/toolkit.js';
 
@@ -35,6 +39,40 @@ const scenario = arg('scenario') ?? 'all';
 const realDmTarget = arg('dm') ? Number(arg('dm')) : undefined;
 
 const config = loadConfig();
+
+// The agent's model: the real failover chain, optionally narrowed (--only) or with Groq's
+// daily cap simulated after N calls (--switch-after), to prove each fallback live.
+const only = arg('only');
+const switchAfter = arg('switch-after') ? Number(arg('switch-after')) : undefined;
+let groqCalls = 0;
+const slots = providerSlots(config)
+  .filter((s) => !only || s.name === only)
+  .map((s) =>
+    s.name !== 'groq' || switchAfter === undefined
+      ? s
+      : {
+          ...s,
+          model: {
+            ...s.model,
+            specificationVersion: 'v4' as const,
+            provider: s.model.provider,
+            modelId: s.model.modelId,
+            supportedUrls: s.model.supportedUrls,
+            doGenerate: (o: Parameters<typeof s.model.doGenerate>[0]) => {
+              if (++groqCalls > switchAfter) throw new LongRateLimitError(8 * 60_000, 'groq');
+              return s.model.doGenerate(o);
+            },
+            doStream: s.model.doStream.bind(s.model),
+          },
+        },
+  );
+if (slots.length === 0) throw new Error(`--only ${only}: provider not configured`);
+const llm = new FailoverModel(slots, {
+  info: (o, m) => console.log(`  [llm] ${m} ${JSON.stringify(o)}`),
+  warn: (o, m) => console.log(`  [llm] ${m} ${JSON.stringify(o)}`),
+  error: (o, m) => console.log(`  [llm] ${m} ${JSON.stringify(o)}`),
+});
+console.log(`LLM chain: ${slots.map((s) => s.name).join(' → ')}${switchAfter !== undefined ? ` (Groq benched after ${switchAfter} call(s))` : ''}`);
 const db = getDb();
 const paypal = getPayPalTools(config);
 const splits = createSplitStore(db);
@@ -70,7 +108,7 @@ const check = (name: string, ok: boolean) => {
 function printRun(out: AgentOutput, seconds: number) {
   console.log(`Agent finished in ${seconds.toFixed(1)}s, ${out.thoughts.length} step(s)`);
   for (const t of out.thoughts) {
-    console.log(`  step ${t.step} (${t.tokens.input ?? '?'} in / ${t.tokens.output ?? '?'} out tokens)`);
+    console.log(`  step ${t.step} [${t.model ?? '?'}] (${t.tokens.input ?? '?'} in / ${t.tokens.output ?? '?'} out tokens)`);
     for (const c of t.toolCalls) console.log(`    → ${c.tool} ${JSON.stringify(c.input)}`);
     for (const r of t.toolResults) console.log(`    ← ${r.tool} ${JSON.stringify(r.output).slice(0, 220)}`);
     for (const e of t.toolErrors) console.log(`    ✗ ${e.tool} ${e.error}`);
@@ -81,7 +119,7 @@ function printRun(out: AgentOutput, seconds: number) {
 async function agent(input: AgentInput) {
   const started = Date.now();
   const out = await runAgent(input, {
-    model: getModel(config),
+    model: llm,
     tools: getAllTools(input.context, { config, sendDm }),
     groupContext: await loadGroupContext(db, input.context.groupId),
     persist: (r) => insertReasoningLog(db, r),
@@ -382,6 +420,7 @@ try {
     console.log(`  Jay DM:  ${jayDm ?? '(none)'}\n  Sean DM: ${seanDm ?? '(none)'}\n`);
     check('tones: both Jay and Sean were DMed', jayDm !== undefined && seanDm !== undefined);
     check('tones: each DM has that person\'s own pay link', Boolean(jayDm?.includes(links.Jay!) && seanDm?.includes(links.Sean!)));
+    check('tones: both DMs state the exact share (€10.00), never another amount', [jayDm, seanDm].every((d) => d !== undefined && d.includes('€10.00') && !/€(?!10\.00)\d/.test(d)));
     // Compare with names and links removed, so "Hey Jay" vs "Hey Sean" alone doesn't count.
     const core = (t: string | undefined, name: string, link: string) => (t ?? '').replace(link, '').replace(new RegExp(name, 'gi'), '').replace(/\W+/g, ' ').trim().toLowerCase();
     check('tones: different wording for direct Jay vs chill Sean (names/links removed)', jayDm !== undefined && seanDm !== undefined && core(jayDm, 'Jay', links.Jay!) !== core(seanDm, 'Sean', links.Sean!));

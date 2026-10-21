@@ -11,7 +11,9 @@ Target audience: Claude Code (or any build-AI). Everything needed to generate th
 - **Telegram**: `grammy`
 - **Agent engine**: Vercel AI SDK (`ai` npm pkg) — provides `generateText({ tools, stopWhen })` which IS the agent loop; no hand-rolled loop needed
 - **PayPal tools**: `@paypal/agent-toolkit/ai-sdk` — official toolkit, pre-wired PayPal tools for function-calling (invoicing, orders, subscriptions, disputes, shipment tracking)
-- **LLM providers**: `@ai-sdk/groq` primary (`openai/gpt-oss-120b`), `@ai-sdk/google` fallback (`gemini-2.5-flash`)
+- **LLM providers** (failover chain, `src/llm/`, pulled forward from milestone 12): `@ai-sdk/groq` primary (`openai/gpt-oss-120b`) → `@ai-sdk/google` (`gemini-3.5-flash`; 2.5-flash is closed to new users) → NVIDIA NIM via `@ai-sdk/openai` `.chat()` on `https://integrate.api.nvidia.com/v1` (`nvidia/nemotron-3-ultra-550b-a55b`; nemotron-3-super-120b is "not found for account" on the free dev key). Models configurable via `GEMINI_MODEL` / `NVIDIA_MODEL`.
+  - Per-minute limits → wait for retry-after (≤60s). Daily quota → bench that provider ≥1h and fail over (logged). 5xx (e.g. Gemini 503 "high demand") → next provider for that call. All out → honest "AI quota is used up" reply.
+  - DMs: telegram_dm replaces any amount the model wrote with the real share and appends the real pay link (models were seen writing "€5" for a €10 share, or omitting the link).
 - **DB**: Supabase (hosted Postgres) via `@supabase/supabase-js`
 - **Scheduler**: `node-cron` for the autonomous 6h runner
 - **Validation**: `zod`
@@ -434,7 +436,7 @@ Webhook subscription setup (manual, after Render deploys):
 | 8–9  | Remaining 5 custom tools: `fetch_group_history`, `get_member_profile`, `remember_preference`, `schedule_followup`, `summarise_debt` |
 | 10   | Memory logic — reliability score + tone picker + webhook → memory update |
 | 11   | Scheduler + autonomous nag flow |
-| 12   | Gemini fallback wiring + prompt cache |
+| 12   | ~~Gemini fallback wiring~~ (done early: Groq → Gemini → NVIDIA chain) + prompt cache |
 | 13   | Render deploy + UptimeRobot + full end-to-end on live URL |
 | 14   | Error handling, logging, retry policies, rate-limit enforcement in tools |
 | 15–16| Optional dashboard (open splits + reliability + reasoning log viewer) |

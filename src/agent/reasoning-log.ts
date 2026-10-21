@@ -12,6 +12,8 @@ export interface Thought {
   toolResults: { tool: string; output: unknown }[];
   toolErrors: { tool: string; error: string }[];
   tokens: { input?: number; output?: number };
+  /** Model that actually answered (with failover, may differ step to step). */
+  model?: string;
 }
 
 export interface ReasoningRecord {
@@ -41,5 +43,6 @@ export function summariseSteps(steps: ReadonlyArray<StepResult<ToolSet>>): Thoug
       .filter((p) => p.type === 'tool-error')
       .map((p) => ({ tool: p.toolName, error: String(clip(p.error instanceof Error ? p.error.message : p.error)) })),
     tokens: { input: s.usage.inputTokens, output: s.usage.outputTokens },
+    model: s.response?.modelId,
   }));
 }

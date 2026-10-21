@@ -1,6 +1,7 @@
 import { GrammyError } from 'grammy';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  composeDm,
   createTelegramDmTool,
   REMINDER_COOLDOWN_MS,
   telegramDmInput,
@@ -123,5 +124,44 @@ describe('telegram_dm tool', () => {
     expect(
       telegramDmInput.safeParse({ split_member_id: MEMBER_ID, kind: 'reminder', message: 'x'.repeat(1001) }).success,
     ).toBe(false);
+  });
+});
+
+describe('composeDm: money facts come from the DB, not the model', () => {
+  const share = { amount: 10, currency: 'EUR', description: 'golf', paymentLink: 'https://www.sandbox.paypal.com/invoice/p/#INV2-REAL' };
+
+  it('fixes a wrong amount the model wrote (seen live: "€5" for a €10 share)', () => {
+    expect(composeDm('still waiting on €5 for golf — pay here https://www.sandbox.paypal.com/invoice/p/#INV2-REAL', share)).toBe(
+      'still waiting on €10.00 for golf\nPay €10.00 here: https://www.sandbox.paypal.com/invoice/p/#INV2-REAL',
+    );
+  });
+
+  it('adds the real link when the model left it out (seen live)', () => {
+    expect(composeDm('no rush, €10 outstanding for golf when you get a sec', share)).toBe(
+      'no rush, €10.00 outstanding for golf when you get a sec\nPay €10.00 here: https://www.sandbox.paypal.com/invoice/p/#INV2-REAL',
+    );
+  });
+
+  it('replaces a wrong/hallucinated PayPal link with the real one', () => {
+    const dm = composeDm('pay up: https://www.paypal.com/invoice/p/#FAKE', share);
+    expect(dm).not.toContain('FAKE');
+    expect(dm.endsWith('Pay €10.00 here: https://www.sandbox.paypal.com/invoice/p/#INV2-REAL')).toBe(true);
+  });
+
+  it('handles "10 EUR" / "quid" wording and other currencies', () => {
+    expect(composeDm('you owe 7 EUR, or 7 quid if you like', share)).toMatch(/^you owe €10.00, or €10.00 if you like/);
+    expect(composeDm('£3 please', { ...share, currency: 'GBP', amount: 4.5 })).toMatch(/^£4.50 please\nPay £4.50 here:/);
+  });
+
+  it('drops a dangling "pay here" / <link> placeholder the model left (seen live)', () => {
+    expect(composeDm('still waiting on €10 for golf — pay here', share)).toBe(
+      'still waiting on €10.00 for golf\nPay €10.00 here: https://www.sandbox.paypal.com/invoice/p/#INV2-REAL',
+    );
+    expect(composeDm('still waiting on €6 — pay here <link>', share)).toMatch(/^still waiting on €10.00\nPay/);
+    expect(composeDm('pay me back for golf, pay day was yesterday', share)).toMatch(/^pay me back for golf, pay day was yesterday\n/);
+  });
+
+  it('no stored link → no footer, text still corrected', () => {
+    expect(composeDm('owe €1', { ...share, paymentLink: null })).toBe('owe €10.00');
   });
 });

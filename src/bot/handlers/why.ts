@@ -51,7 +51,7 @@ export function formatWhy(entry: ReasoningLogEntry | null): string {
   const lines = [`My last decision (${TRIGGER_LABEL[entry.trigger ?? ''] ?? entry.trigger ?? 'unknown'}, ${formatTime(entry.createdAt)})`];
 
   for (const t of thoughts) {
-    lines.push('', `Step ${t.step}`);
+    lines.push('', `Step ${t.step}${t.model ? ` (${t.model})` : ''}`);
     if (t.reasoning) lines.push(`thought: ${clip(redact(t.reasoning.replace(/\s+/g, ' ')), 280)}`);
     t.toolCalls.forEach((c, i) => {
       const args = scalarPairs(c.input, (k) => HIDDEN_INPUTS.has(k), 4);

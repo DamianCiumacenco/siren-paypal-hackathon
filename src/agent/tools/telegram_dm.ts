@@ -13,6 +13,8 @@ export interface DmMember {
   remindersSent: number;
   userId: number | null;
   telegramUserId: number | null;
+  /** From the DB — the DM states these, never the model's version of them. */
+  share?: { amount: number; currency: string; description: string; paymentLink: string | null };
 }
 
 export interface DmStore {
@@ -27,6 +29,30 @@ export interface DmStore {
 
 export type SendDm = (telegramUserId: number, text: string) => Promise<void>;
 
+const SYMBOL: Record<string, string> = { EUR: '€', GBP: '£', USD: '$' };
+const MONEY = /[€£$]\s?\d+(?:[.,]\d{1,2})?|\b\d+(?:[.,]\d{1,2})?\s?(?:EUR|GBP|USD|euros?|quid|pounds?|dollars?)\b/gi;
+const PAYPAL_LINK = /\s*(?:[-—:]\s*)?(?:pay(?: here)?:?\s*)?https?:\/\/(?:www\.)?(?:sandbox\.)?paypal\.com\/invoice\/\S+/gi;
+
+/**
+ * The model writes the tone; the money facts come from the DB. Live runs showed models
+ * occasionally putting the wrong amount ("€5" for a €10 share) or leaving out the link,
+ * so: every amount the model wrote is replaced with the real share, any PayPal link it
+ * wrote is removed, and the real pay link is appended. Same rule as the ✅ card copy.
+ */
+export function composeDm(message: string, share: DmMember['share']): string {
+  if (!share) return message.trim();
+  const amount = `${SYMBOL[share.currency] ?? ''}${share.amount.toFixed(2)}${SYMBOL[share.currency] ? '' : ` ${share.currency}`}`;
+  const text = message
+    .replace(PAYPAL_LINK, '')
+    .replace(/<link>|\[link\]/gi, '')
+    .replace(MONEY, amount)
+    .trim()
+    // The footer carries the link, so drop a dangling "— pay here" the model left behind.
+    .replace(/[\s—:-]*(?:pay(?: (?:it|here|now))?|link)[\s:]*$/i, '')
+    .replace(/[\s—:-]+$/, '');
+  return share.paymentLink ? `${text}\nPay ${amount} here: ${share.paymentLink}` : text;
+}
+
 export interface TelegramDmDeps {
   context: AgentContext;
   store: DmStore;
@@ -39,7 +65,11 @@ export const telegramDmInput = z.object({
   kind: z
     .enum(['payment_link', 'reminder'])
     .describe('payment_link = first delivery of their pay link; reminder = any nag or check-in (rate limited 1/24h)'),
-  message: z.string().min(1).max(MAX_MESSAGE_CHARS).describe('The DM text, written in the member\'s preferred tone'),
+  message: z
+    .string()
+    .min(1)
+    .max(MAX_MESSAGE_CHARS)
+    .describe("The DM in the member's preferred tone. The exact amount is corrected and their pay link appended automatically."),
 });
 
 type Result = { ok: true; sent_to: string; kind: string } | { ok: false; error: string; hint?: string };
@@ -85,7 +115,7 @@ export function createTelegramDmTool(deps: TelegramDmDeps) {
       }
 
       try {
-        await deps.sendDm(member.telegramUserId, message);
+        await deps.sendDm(member.telegramUserId, composeDm(message, member.share));
       } catch (err) {
         // 403 = user never opened a DM with the bot, or blocked it. Telegram bots can't
         // start conversations, so tell the agent how to fix it instead of failing the run.
