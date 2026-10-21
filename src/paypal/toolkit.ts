@@ -85,3 +85,29 @@ export function parseToolkitResult<T = Record<string, unknown>>(result: unknown)
   }
   return parsed as T;
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Call a toolkit tool, parse it with parseToolkitResult, and retry PayPal 429s.
+ * The toolkit swallows HTTP headers (it returns `{ok:false,status:429,...}`), so a
+ * Retry-After value isn't available here — exponential backoff (1s, 2s, 4s) instead.
+ */
+export async function executeToolkit<T = Record<string, unknown>>(
+  t: { execute?: (input: never, options: never) => unknown },
+  input: unknown,
+  opts: { retries?: number; baseDelayMs?: number } = {},
+): Promise<T> {
+  const retries = opts.retries ?? 3;
+  const baseDelayMs = opts.baseDelayMs ?? 1000;
+  if (!t.execute) throw new Error('toolkit tool has no execute');
+  for (let attempt = 0; ; attempt++) {
+    const raw = await t.execute(input as never, { toolCallId: 'siren', messages: [] } as never);
+    const rateLimited = typeof raw === 'string' && /"status":429\b/.test(raw);
+    if (rateLimited && attempt < retries) {
+      await sleep(baseDelayMs * 2 ** attempt);
+      continue;
+    }
+    return parseToolkitResult<T>(raw);
+  }
+}

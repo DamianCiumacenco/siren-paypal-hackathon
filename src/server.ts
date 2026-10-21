@@ -1,9 +1,16 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Bot } from 'grammy';
+import type { SirenContext } from './bot/context.js';
 import { createBot, telegramWebhookSecret } from './bot/index.js';
 import { loadConfig, type Config } from './config.js';
 import { getDb } from './db/client.js';
+import { runAgent } from './agent/run.js';
+import { createChatRegistry } from './db/chats.js';
 import { createInvoiceStore } from './db/split_members.js';
+import { createSplitStore } from './db/splits.js';
+import { logError, safeErrorMessage, type Logger } from './lib/safe-error.js';
+import { sendSplitInvoices } from './paypal/split_invoices.js';
+import { getPayPalTools } from './paypal/toolkit.js';
 import { SIMULATOR_WEBHOOK_ID, type InvoiceStore } from './paypal/webhooks.js';
 import { healthRoutes } from './routes/health.js';
 import { paypalRoutes, type PayPalRouteOptions } from './routes/paypal.js';
@@ -14,7 +21,7 @@ export interface ServerDeps {
    * Webhook mode only. Leave undefined for long polling: grammy's webhookCallback
    * disables bot.start(), so mounting the route in polling mode crashes startup.
    */
-  telegram?: { bot: Bot; secretToken: string };
+  telegram?: { bot: Bot<SirenContext>; secretToken: string };
   paypal: PayPalRouteOptions;
 }
 
@@ -36,13 +43,38 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const bot = createBot(config.TELEGRAM_BOT_TOKEN);
+  const db = getDb();
+
+  // The bot is built before Fastify (the webhook route needs it), so its logger forwards
+  // to app.log once the app exists. Bot log calls only happen after startup.
+  let app: FastifyInstance | undefined;
+  const log: Logger = {
+    info: (o, m) => app?.log.info(o, m),
+    warn: (o, m) => app?.log.warn(o, m),
+    error: (o, m) => app?.log.error(o, m),
+  };
+
+  const splits = createSplitStore(db);
+  const paypalTools = getPayPalTools(config);
+  const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {
+    registry: createChatRegistry(db),
+    runAgent: (input) => runAgent(input),
+    splits,
+    sendSplit: (split) =>
+      sendSplitInvoices(split, {
+        paypal: paypalTools,
+        store: splits,
+        sendDm: async (to, text) => void (await bot.api.sendMessage(to, text)),
+        log,
+      }),
+    log,
+  });
   const telegramSecret = telegramWebhookSecret(config.TELEGRAM_BOT_TOKEN);
 
-  const store: InvoiceStore = createInvoiceStore(getDb());
+  const store: InvoiceStore = createInvoiceStore(db);
   const webhookIds = acceptedWebhookIds(config);
   const webhookMode = Boolean(config.PUBLIC_URL);
-  const app = await buildServer({
+  app = await buildServer({
     telegram: webhookMode ? { bot, secretToken: telegramSecret } : undefined,
     paypal: { webhookIds, store },
   });
@@ -57,15 +89,15 @@ async function main(): Promise<void> {
     // Local dev: no public URL, so pull updates instead. deleteWebhook first because
     // Telegram refuses getUpdates while a webhook is set.
     await bot.api.deleteWebhook();
-    bot.start({ onStart: (me) => app.log.info(`Telegram long polling as @${me.username}`) }).catch((err) => {
-      app.log.error(err, 'Telegram long polling stopped');
+    bot.start({ onStart: (me) => log.info({}, `Telegram long polling as @${me.username}`) }).catch((err) => {
+      logError(log, err, 'Telegram long polling stopped');
       process.exit(1);
     });
   }
 
   const shutdown = async () => {
     if (bot.isRunning()) await bot.stop();
-    await app.close();
+    await app?.close();
     process.exit(0);
   };
   process.once('SIGINT', shutdown);
@@ -75,7 +107,7 @@ async function main(): Promise<void> {
 // Only start when run directly (`tsx src/server.ts`), not when imported by tests.
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((err) => {
-    console.error(err instanceof Error ? err.message : err);
+    console.error(safeErrorMessage(err));
     process.exit(1);
   });
 }

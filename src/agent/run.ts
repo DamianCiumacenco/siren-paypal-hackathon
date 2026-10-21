@@ -12,6 +12,14 @@ import type { AgentInput, GroupContext } from './types.js';
 /** Hard cap on agent steps (CLAUDE.md). Each step = one LLM call + its tool calls. */
 export const MAX_AGENT_STEPS = 6;
 
+/**
+ * LLM retries per step. The AI SDK waits for the provider's retry-after / retry-after-ms
+ * header when it's under 60s (Groq sends one on its 8k tokens/min limit), else backs off
+ * exponentially. The default of 2 wasn't enough when tokens were still counted against
+ * the previous minute.
+ */
+export const LLM_MAX_RETRIES = 5;
+
 export interface AgentOutput {
   response: string;
   thoughts: Thought[];
@@ -36,6 +44,17 @@ async function defaultDeps(input: AgentInput): Promise<AgentDeps> {
   };
 }
 
+/** The split the agent proposed in this run (send_split_invoices succeeded), if any. */
+export function findSplitProposal(thoughts: Thought[]): { splitId: string } | undefined {
+  for (const t of [...thoughts].reverse()) {
+    for (const r of t.toolResults) {
+      const out = r.output as { ok?: boolean; split_id?: unknown } | undefined;
+      if (r.tool === 'send_split_invoices' && out?.ok && typeof out.split_id === 'string') return { splitId: out.split_id };
+    }
+  }
+  return undefined;
+}
+
 /** Single entry point for the agent: one call = one generateText tool loop. */
 export async function runAgent(input: AgentInput, overrides: Partial<AgentDeps> = {}): Promise<AgentOutput> {
   const complete = overrides.model && overrides.tools && 'groupContext' in overrides && overrides.persist;
@@ -47,6 +66,7 @@ export async function runAgent(input: AgentInput, overrides: Partial<AgentDeps> 
     prompt: input.userMessage,
     tools: deps.tools,
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
+    maxRetries: LLM_MAX_RETRIES,
   });
 
   const thoughts = summariseSteps(result.steps);

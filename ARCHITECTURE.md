@@ -239,6 +239,7 @@ That's it. The SDK runs the loop, calls tools, feeds results back, decides when 
 - `send_invoice`
 - `send_invoice_reminder`
 - `cancel_sent_invoice`
+- `create_invoice` / `send_invoice` are called from code (`src/paypal/split_invoices.ts`) after the ✅ tap, not by the LLM (milestone 7: their schemas cost ~2,900 tokens/step). The agent sees `get_invoice`, `send_invoice_reminder`, `cancel_sent_invoice` + custom tools.
 - Deliberately NOT exposed to the agent: `list_invoices` (lists the whole merchant account across groups — in the milestone-5 live run the agent found and reminded another group's invoice on a guess), orders (invoices only; toolkit orders are USD-only), subscriptions, disputes.
 - Every exposed invoice tool is wrapped by `src/agent/tools/paypal_scoped.ts` (the PayPal call is still the toolkit's): invoice ids must belong to this group's split members or be created in the same run; `send_invoice_reminder` shares telegram_dm's 1-per-user-per-24h limit; results are normalised to `{ ok, ... }`; `get_invoice` returns a compact summary (Groq free tier = 8k tokens/min).
 
@@ -263,6 +264,7 @@ export const paypalTools = paypalToolkit.getTools();
 ### Our custom tools (`src/agent/tools/`)
 | Tool | When agent uses it | Writes to |
 |------|--------------------|-----------|
+| `send_split_invoices` | New split (user_message only). Slim schema (~300 tokens) instead of the toolkit's create_invoice (~2,700). Saves a **draft**; invoices go out only after the creator taps ✅ | `splits` (status `draft`), `split_members` |
 | `fetch_group_history` | Needs context about past splits | — (read-only) |
 | `get_member_profile` | Personalising a reminder | — (read-only) |
 | `remember_preference` | User states a pref, or agent infers one | `user_memory` |
@@ -351,14 +353,18 @@ Memory updates triggered by: webhook payment, scheduled runs decrementing on no-
 
 ## Core flows (updated for Vercel AI SDK)
 
-### Flow A — New split
+### Flow A — New split (milestone 7)
 ```
-Group msg → middleware → handlers/message.ts → runAgent({ trigger: 'user_message' })
-Step 1  thought "User wants €60 split 10 ways for football"
-        tool    create_invoice (×10, from PayPal toolkit)
-        result  invoices sent, links returned
-Step 2  tool    telegram_dm (×10, deliver links)
-Step 3  tool    (implicit respond) "Sent 10 requests. /status anytime."
+Group msg (/split, @mention or reply to Siren — other chatter never reaches the agent)
+  → middleware (register group/user/membership) → handlers/message.ts (1 run per group at a time, in background)
+  → runAgent({ trigger: 'user_message' })
+Step 1  tool    send_split_invoices({ description, total, currency, participants }) → draft split
+Step 2  reply   "Drafted €18 football, €6 each — tap ✅ on the card"
+Bot     card    "New split: 6.00 EUR each, 3 people … [✅ Send requests] [❌ Cancel]"  (text from the tool result, not the LLM)
+✅ tap (creator only, atomic draft→open, so double taps are no-ops) — NO LLM in the money path:
+        per member: toolkit create_invoice → send_invoice(send_to_recipient:false) → payer link
+        → store invoice id + link → DM link (403 / unknown member → link posted in group)
+        → group summary
 ```
 
 ### Flow B — Payment received

@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { webhookCallback, type Bot } from 'grammy';
+import type { SirenContext } from '../bot/context.js';
 
 export interface TelegramRouteOptions {
-  bot: Bot;
+  bot: Bot<SirenContext>;
   secretToken: string;
 }
 

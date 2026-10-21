@@ -8,7 +8,7 @@ export interface AgentContext {
   chatId: number;
   splitId?: string;
   /** Telegram user who sent the message (user_message trigger only). */
-  sender?: { telegramUserId: number; firstName: string; username?: string };
+  sender?: { telegramUserId: number; firstName: string; username?: string; /** users.id */ userId: number };
   /** ISO country code used for currency slang ("quid"). Defaults to IE. */
   senderCountry?: string;
 }

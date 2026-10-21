@@ -1,5 +1,5 @@
 import { tool, type Tool, type ToolSet } from 'ai';
-import { parseToolkitResult } from '../../paypal/toolkit.js';
+import { executeToolkit } from '../../paypal/toolkit.js';
 import type { AgentContext } from '../types.js';
 import { REMINDER_COOLDOWN_MS, type DmMember } from './telegram_dm.js';
 
@@ -34,8 +34,7 @@ type Result = Record<string, unknown> & { ok: boolean };
 /** Run a toolkit tool and normalise its output (it returns errors as JSON, never throws). */
 async function runToolkit(t: Tool, input: unknown): Promise<Result> {
   try {
-    const raw = await t.execute!(input as never, { toolCallId: 'scoped', messages: [] } as never);
-    return { ok: true, ...parseToolkitResult(raw) };
+    return { ...(await executeToolkit(t, input)), ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }

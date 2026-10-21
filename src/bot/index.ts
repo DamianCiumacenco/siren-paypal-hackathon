@@ -1,36 +1,60 @@
 import { createHash } from 'node:crypto';
-import { Bot, type BotConfig, type Context } from 'grammy';
+import { Bot, type BotConfig } from 'grammy';
+import type { ChatRegistry } from '../db/chats.js';
+import { logError, type Logger } from '../lib/safe-error.js';
+import { registerBasicCommands } from './commands.js';
+import type { SirenContext } from './context.js';
+import { createSplitCallbackHandler, SPLIT_CALLBACK, type CallbackDeps } from './handlers/callback.js';
+import { agentPrompt, createAgentMessageHandler, type MessageHandlerDeps } from './handlers/message.js';
+import { registerChat } from './middleware.js';
+
+export interface BotDeps extends MessageHandlerDeps, CallbackDeps {
+  registry: ChatRegistry;
+  log: Logger;
+}
+
+const consoleLog: Logger = {
+  info: (o, m) => console.log(m, o),
+  warn: (o, m) => console.warn(m, o),
+  error: (o, m) => console.error(m, o),
+};
 
 /**
- * Create the grammy bot. Milestone 1 only wires /start and /help so we can see
- * the bot is alive; the real command set + agent hand-off lands in milestone 7.
+ * Build the bot. Without `deps` only /start and /help work (no DB) — used by tests that
+ * only check webhook wiring. Registration order matters: the chat-registration
+ * middleware must run before any command so /start in a DM links the user.
  */
-export function createBot(token: string, options?: BotConfig<Context>): Bot {
-  const bot = new Bot(token, options);
+export function createBot(token: string, options?: BotConfig<SirenContext>, deps?: BotDeps): Bot<SirenContext> {
+  const bot = new Bot<SirenContext>(token, options);
+  const log = deps?.log ?? consoleLog;
 
-  bot.command('start', (ctx) =>
-    ctx.reply(
-      "Hi, I'm Siren. I split bills with PayPal and chase up who still owes. Type /help to see what I can do.",
-    ),
-  );
+  // Error boundary FIRST. grammy only calls bot.catch() in long-polling mode; with a
+  // webhook, handleUpdate throws a BotError up to Fastify, whose error logger prints the
+  // error's properties (an ai-sdk error's requestBodyValues = the whole prompt) and
+  // answers 500, so Telegram re-delivers the same update. Catching here covers both modes.
+  bot.use(async (ctx, next) => {
+    try {
+      await next();
+    } catch (err) {
+      logError(log, err, 'bot update failed', { updateId: ctx.update.update_id, chatId: ctx.chat?.id });
+    }
+  });
 
-  bot.command('help', (ctx) =>
-    ctx.reply(
-      [
-        'Siren commands:',
-        '/split — start a new bill split',
-        '/status — who has paid and who has not',
-        '/nag — remind unpaid members',
-        '/siren about <name> | why | debt | tone <chill|neutral|direct>',
-        '',
-        'Most of these are still being built.',
-      ].join('\n'),
-    ),
-  );
+  if (deps) bot.use(registerChat(deps.registry));
+  registerBasicCommands(bot);
+
+  if (deps) {
+    const handleAgent = createAgentMessageHandler(deps);
+    bot.on('message:text', async (ctx) => {
+      const prompt = agentPrompt(ctx);
+      if (prompt) await handleAgent(ctx, prompt);
+    });
+    bot.callbackQuery(SPLIT_CALLBACK, createSplitCallbackHandler(deps));
+  }
 
   bot.catch((err) => {
-    // Log the error only — never the full update (it can contain user messages).
-    console.error(`[bot] error handling update ${err.ctx.update.update_id}:`, err.error);
+    // Never log err.error raw or the update — both can contain message text and names.
+    logError(log, err.error, 'bot update failed', { updateId: err.ctx.update.update_id });
   });
 
   return bot;

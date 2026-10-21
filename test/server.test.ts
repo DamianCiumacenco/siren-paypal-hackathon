@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { APICallError } from 'ai';
 import type { UserFromGetMe } from 'grammy/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBot, telegramWebhookSecret } from '../src/bot/index.js';
@@ -163,6 +164,46 @@ describe('polling mode (no PUBLIC_URL)', () => {
     expect(res.statusCode).toBe(404);
     // grammy replaces bot.start with a throwing stub once webhookCallback is created.
     expect(bot.start.toString()).not.toContain('already started the bot via webhooks');
+    await app.close();
+  });
+});
+
+describe('Telegram webhook mode: errors never reach Fastify', () => {
+  it('a failing update returns 200 (no Telegram re-delivery) and logs no PII', async () => {
+    const logs: string[] = [];
+    const capture = (o: object, m?: string) => void logs.push(JSON.stringify({ ...o, msg: m }));
+    const bot = createBot(TOKEN, { botInfo }, {
+      registry: {
+        registerUser: async () => {
+          throw new APICallError({
+            message: 'boom',
+            url: 'https://api.groq.com',
+            requestBodyValues: { prompt: 'Members: Jay Murphy owes €60 for football' },
+            statusCode: 500,
+          });
+        },
+        registerGroup: async () => 1,
+        registerMembership: async () => {},
+      },
+      runAgent: async () => ({ response: '', thoughts: [] }),
+      splits: {} as never,
+      sendSplit: async () => ({ dmed: [], linkInGroup: [], failed: [] }),
+      log: { info: capture, warn: capture, error: capture },
+    });
+    bot.api.config.use(async () => ({ ok: true, result: true }) as never);
+    const app = await buildServer({
+      telegram: { bot, secretToken: SECRET },
+      paypal: { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } },
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/webhook/telegram',
+      headers: { 'x-telegram-bot-api-secret-token': SECRET },
+      payload: startUpdate('/start'),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(logs.join()).toContain('bot update failed');
+    for (const pii of ['Jay', 'Murphy', '€60', 'football']) expect(logs.join()).not.toContain(pii);
     await app.close();
   });
 });

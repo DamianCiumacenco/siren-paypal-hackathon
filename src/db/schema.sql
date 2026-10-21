@@ -26,7 +26,7 @@ create table if not exists splits (
   total_amount      numeric(10,2),
   currency          text default 'EUR' check (currency in ('EUR','USD','GBP')),
   per_person_amount numeric(10,2),
-  status            text default 'open' check (status in ('open','settled','cancelled')),
+  status            text default 'open' check (status in ('draft','open','settled','cancelled')),
   next_nag_at       timestamptz,                -- set by schedule_followup tool
   created_at        timestamptz default now()
 );
@@ -72,6 +72,11 @@ create index if not exists idx_split_members_invoice   on split_members(paypal_i
 create index if not exists idx_splits_group_open       on splits(group_id) where status = 'open';
 create index if not exists idx_user_memory_user_group  on user_memory(user_id, group_id);
 create index if not exists idx_reasoning_log_group     on reasoning_log(group_id, created_at desc);
+
+-- Milestone 7: 'draft' = proposed by the agent, waiting for the creator to tap ✅ Send.
+-- (`create table if not exists` won't change an existing table, so migrate the check explicitly.)
+alter table splits drop constraint if exists splits_status_check;
+alter table splits add constraint splits_status_check check (status in ('draft','open','settled','cancelled'));
 
 -- Supabase exposes every public table over its REST API to anyone holding the anon key.
 -- Enabling RLS with no policies blocks anon access entirely; our server uses the

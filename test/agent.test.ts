@@ -149,7 +149,7 @@ describe('runAgent', () => {
 describe('buildSystemPrompt', () => {
   it('fills in trigger, sender country and the group snapshot', () => {
     const prompt = buildSystemPrompt(
-      { ...input, trigger: 'user_message', context: { ...input.context, sender: { telegramUserId: 1, firstName: 'Damian' } } },
+      { ...input, trigger: 'user_message', context: { ...input.context, sender: { telegramUserId: 1, firstName: 'Damian', userId: 1 } } },
       groupContext,
       new Date('2026-10-21T12:00:00Z'),
     );
