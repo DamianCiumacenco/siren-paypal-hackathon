@@ -16,7 +16,7 @@ export interface MessageHandlerDeps {
 }
 
 /** Commands that go to the agent. /start and /help are answered directly. */
-export const AGENT_COMMANDS = ['split', 'status', 'nag'] as const;
+export const AGENT_COMMANDS = ['split', 'status', 'nag', 'siren'] as const;
 
 /**
  * In groups the bot sees every message (privacy mode off), but only these reach the
@@ -39,6 +39,20 @@ export function agentPrompt(ctx: SirenContext): string | undefined {
   if (mention.test(text)) return text.replace(mention, '').trim() || 'hi';
   if (msg.reply_to_message?.from?.id === ctx.me.id) return text;
   return undefined;
+}
+
+/**
+ * Replies are sent as plain text (no parse_mode), so Markdown the model slips in despite
+ * the prompt would show up literally. Strip the common bits: **bold**, __bold__, `code`,
+ * # headings.
+ */
+export function plainText(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .trim();
 }
 
 function isRateLimit(err: unknown): boolean {
@@ -109,7 +123,7 @@ export function createAgentMessageHandler(deps: MessageHandlerDeps) {
             userMessage: prompt,
             context: { groupId, chatId, sender },
           });
-          await ctx.reply(output.response, { reply_parameters: { message_id: ctx.message!.message_id } });
+          await ctx.reply(plainText(output.response), { reply_parameters: { message_id: ctx.message!.message_id } });
           const card = splitCard(output, sender.firstName);
           if (card) await ctx.reply(card.text, { reply_markup: card.keyboard });
         } catch (err) {

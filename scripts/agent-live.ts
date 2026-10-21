@@ -2,7 +2,7 @@
 // throwaway group that is deleted at the end (every invoice it created is cancelled).
 //
 //   npm run agent:live                      # both scenarios, DMs are dry runs (printed, not sent)
-//   npm run agent:live -- --scenario split  # nag | split
+//   npm run agent:live -- --scenario split  # split | nag | memory
 //   npm run agent:live -- --dm <telegramId> # really DM that Telegram user (must have /start-ed the bot)
 //
 // Groq free tier = 8k tokens/min: the script waits between scenarios.
@@ -236,6 +236,9 @@ try {
       out.thoughts.some((t) => t.toolCalls.some((c) => c.tool === 'telegram_dm' || c.tool === 'send_invoice_reminder')),
     );
     check('any DM to Jay contains his real pay link', dms.every((d) => d.text.includes(payLink)));
+    check("group reply doesn't repeat the DM or expose Jay's pay link", !out.response.includes(payLink) && !dms.some((d) => out.response.includes(d.text)));
+    const followup = out.thoughts.some((t) => t.toolCalls.some((c) => c.tool === 'schedule_followup'));
+    console.log(`  (info) schedule_followup used: ${followup}`);
     check('at most one reminder (rate limit)', dms.length <= 1 && jay.reminders_sent <= 2);
     check(
       'no PayPal action on invoices outside this group',
@@ -248,8 +251,78 @@ try {
     );
   }
 
+  // --- scenario: memory (/siren about, tone, debt) ---------------------------------
+  let memoryRuns = 0;
+  if (scenario === 'all' || scenario === 'memory') {
+    if (scenario === 'all') {
+      console.log('\n(waiting 60s for the Groq tokens-per-minute window)\n');
+      await new Promise((r) => setTimeout(r, 60_000));
+    }
+    // Jay: a reliable payer with history, so "about" has something real to say.
+    await db
+      .from('user_memory')
+      .update({ reliability_score: 0.94, preferred_tone: 'chill', avg_hours_to_pay: 6, total_splits: 17, total_paid_ontime: 16, notes: '2026-10-01: gets paid on the 25th' })
+      .eq('user_id', jayId)
+      .eq('group_id', groupId);
+    const past = must<{ id: string }>(
+      await db
+        .from('splits')
+        .insert({ group_id: groupId, creator_user_id: damianId, description: 'bowling', total_amount: 20, per_person_amount: 10, currency: 'EUR', status: 'settled', created_at: '2026-10-10T18:00:00Z' })
+        .select('id')
+        .single(),
+      'insert past split',
+    );
+    await db.from('split_members').insert({ split_id: past.id, user_id: jayId, display_name: 'Jay', status: 'paid', paid_at: '2026-10-11T00:00:00Z' });
+    const open = must<{ id: string }>(
+      await db
+        .from('splits')
+        .insert({ group_id: groupId, creator_user_id: damianId, description: 'cinema', total_amount: 24, per_person_amount: 12, currency: 'EUR', status: 'open' })
+        .select('id')
+        .single(),
+      'insert open split',
+    );
+    await db.from('split_members').insert({ split_id: open.id, user_id: jayId, display_name: 'Jay', status: 'sent' });
+    const sender = { telegramUserId: DAMIAN_TG, firstName: 'Damian', userId: damianId };
+    const used = (out: AgentOutput, tool: string) => out.thoughts.some((t) => t.toolCalls.some((c) => c.tool === tool));
+
+    console.log('=== memory: /siren about Jay');
+    const about = await agent({ trigger: 'user_message', userMessage: '/siren about Jay', context: { groupId, chatId: FAKE_CHAT_ID, sender } });
+    memoryRuns++;
+    check('about: used get_member_profile', used(about, 'get_member_profile'));
+    check('about: reply cites the learned profile (0.94 / 94% / 25th)', /0\.94|94\s?%|25th/.test(about.response));
+    check('about: no internal ids shown', !/user[ _]?(id)?\s*:?\s*\d|split_member_id|[0-9a-f]{8}-[0-9a-f]{4}-/i.test(about.response));
+    await new Promise((r) => setTimeout(r, 25_000));
+
+    console.log('=== memory: /siren tone direct (from Damian)');
+    const tone = await agent({ trigger: 'user_message', userMessage: '/siren tone direct', context: { groupId, chatId: FAKE_CHAT_ID, sender } });
+    memoryRuns++;
+    const damianTone = must<{ preferred_tone: string }>(
+      await db.from('user_memory').select('preferred_tone').eq('user_id', damianId).eq('group_id', groupId).single(),
+      'read tone',
+    );
+    const jayTone = must<{ preferred_tone: string }>(
+      await db.from('user_memory').select('preferred_tone').eq('user_id', jayId).eq('group_id', groupId).single(),
+      'read jay tone',
+    );
+    check('tone: remember_preference set the SENDER to direct', used(tone, 'remember_preference') && damianTone.preferred_tone === 'direct');
+    check("tone: Jay's tone untouched", jayTone.preferred_tone === 'chill');
+    await new Promise((r) => setTimeout(r, 25_000));
+
+    console.log('=== memory: /siren debt');
+    const debt = await agent({ trigger: 'user_message', userMessage: '/siren debt', context: { groupId, chatId: FAKE_CHAT_ID, sender } });
+    memoryRuns++;
+    check('debt: used summarise_debt', used(debt, 'summarise_debt'));
+    // Open splits at this point: cinema (Jay €12) + whatever earlier scenarios left open.
+    const expected = must<{ debts: { from: string; amount: string }[] }>(
+      { data: debt.thoughts.flatMap((t) => t.toolResults).find((r) => r.tool === 'summarise_debt')?.output ?? null, error: null },
+      'read debt result',
+    ).debts.find((d) => d.from === 'Jay');
+    check('debt: reply quotes the tool\'s figure for Jay', expected !== undefined && debt.response.includes(expected.amount.split(' ')[0]!));
+  }
+
   const logs = must<unknown[]>(await db.from('reasoning_log').select('id').eq('group_id', groupId), 'read log');
-  check('every agent run persisted to reasoning_log', logs.length === (scenario === 'all' ? 2 : 1));
+  const expectedRuns = (scenario === 'all' ? 2 : scenario === 'memory' ? 0 : 1) + memoryRuns;
+  check('every agent run persisted to reasoning_log', logs.length === expectedRuns);
 } catch (err) {
   console.error(`\nLive run failed: ${safeErrorMessage(err)}`);
   process.exitCode = 1;

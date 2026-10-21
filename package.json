@@ -18,7 +18,8 @@
     "paypal:sanity": "tsx scripts/paypal-sanity.ts",
     "test:startup": "tsx scripts/startup-smoke.ts",
     "agent:live": "tsx scripts/agent-live.ts",
-    "test:pii": "vitest run -t PII"
+    "test:pii": "vitest run -t PII",
+    "db:reset": "tsx scripts/db-reset.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.99",

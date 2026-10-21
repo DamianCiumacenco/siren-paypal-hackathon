@@ -23,6 +23,8 @@ npm test
 
 - **`npm audit` reports 10 vulnerabilities (3 low, 2 moderate, 5 high).** All of them are in transitive dependencies of `@paypal/agent-toolkit` (e.g. `mathjs`, `langsmith`, `uuid`), and there is no upstream fix yet: the only automated fix (`npm audit fix --force`) downgrades the toolkit to 1.3.5, which is a breaking change. Siren runs in PayPal sandbox only. We'll bump the toolkit when PayPal ships a fix.
 
+- **Design decision (v2 scope): pay-link fallback in the group chat.** If a member has never opened a private chat with Siren, Telegram won't let the bot DM them, so their PayPal pay link is posted in the group instead. That's fine in sandbox, but in production any group member could open that link and pay someone else's share. A production version should ask the member to DM the bot first (a "tap here to get your link" deep link) rather than post the link publicly.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -46,6 +46,35 @@ Use whenever a milestone changes `/webhook/paypal` handling. Do all the setup BE
 8. If the tunnel log shows `connection refused`, the server died: check server.log before asking the human to resend.
 9. Tear down: stop the Monitor, kill the server + cloudflared, confirm with `pgrep`. Put the event ids + results in the milestone commit message.
 
+## Runbook: manual E2E test in a real Telegram group (human + mates)
+For Damian + 3 mates ("Jay", "Sean", "Mike"). Uses the sandbox, so no real money moves. ~20 min.
+
+**Before (Damian, laptop)**
+1. `npm run db:reset -- --yes` cancels open sandbox invoices and wipes all Siren data. Then `npm run db:check`.
+2. Make sure nothing else is polling the bot: stop any other `npm run dev` and don't deploy to Render mid-test. Two pollers get a Telegram 409 and one crashes.
+3. `npm run test:startup`, then `npm run dev` and leave it running. Wait for `Telegram long polling as @siren_pay_bot`.
+4. Optional (needed for "paid" to update): run a cloudflared quick tunnel to `localhost:3000`. In the PayPal dashboard → Siren Dev app → Webhooks, add `<tunnel>/webhook/paypal` with "Invoicing invoice paid" + "Invoicing invoice cancelled". Put its id in `PAYPAL_WEBHOOK_ID` and restart `npm run dev`. The quick-tunnel URL changes every run, so update the webhook each session. Keep `PAYPAL_WEBHOOK_ALLOW_SIMULATOR` unset.
+
+**Setup in Telegram (order matters)**
+5. Create a group and add `@siren_pay_bot`. If the bot was added before `/setprivacy → Disable`, remove and re-add it, or it won't see group messages.
+6. EACH mate (any order, but ALL before the first /split):
+   a. Opens a private chat with `@siren_pay_bot` and presses **Start**. Until they do, Siren can't DM them, and their pay link gets posted in the group instead.
+   b. Sends any message in the group ("hi"). This registers them as a group member so `/split` can match their name. Two people with the same first name → use `@username` in `/split`.
+7. Give each mate a sandbox Personal login (SETUP.md §1.5). Pay links only work when logged into a **sandbox** account, never a real one.
+
+**Test script (in the group)**
+8. Damian: `/split €24 pizza with Jay, Sean and Mike` → reply + card. Jay taps ✅: refused (creator only). Damian taps ✅: each mate gets a DM with their pay link, plus a group summary.
+9. `/status`, `@siren_pay_bot who still owes?`, `/siren debt`.
+10. Jay pays his link (sandbox login). With the webhook from step 4, `/status` shows him paid within ~1 min.
+11. `/siren tone chill` (Sean), `/siren about Mike`, `/nag` → reminders respect each person's tone, max 1 per person per 24h (a second `/nag` is refused).
+12. `/split €10 test with Jay` → ❌ Cancel → nothing is sent.
+
+**Watch for** (terminal running `npm run dev`): errors show ids only, never names or message text. Anything else is a `test:pii` bug, so note the update id. Groq free tier = 8k tokens/min: if Siren says it's over its rate limit, wait a minute.
+
+**Teardown**
+13. Ctrl+C `npm run dev` (and the tunnel). Delete the tunnel webhook in the PayPal dashboard.
+14. `npm run db:reset -- --yes` (cancels unpaid sandbox invoices, wipes data). Optionally remove the bot from the group.
+
 ## Guardrails
 - Scope deltas: ask first.
 - Secrets: never commit `.env.local`. `.env.example` with blank values only.

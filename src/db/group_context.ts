@@ -25,6 +25,7 @@ interface MemoryRow {
   reliability_score: number | null;
   preferred_tone: 'chill' | 'neutral' | 'direct' | null;
   avg_hours_to_pay: number | null;
+  notes: string | null;
   users: { first_name: string | null; username: string | null } | null;
 }
 
@@ -45,7 +46,7 @@ export async function loadGroupContext(db: SupabaseClient, groupId: number): Pro
       .returns<SplitRow[]>(),
     db
       .from('user_memory')
-      .select('user_id, reliability_score, preferred_tone, avg_hours_to_pay, users(first_name, username)')
+      .select('user_id, reliability_score, preferred_tone, avg_hours_to_pay, notes, users(first_name, username)')
       .eq('group_id', groupId)
       .returns<MemoryRow[]>(),
     db
@@ -68,6 +69,7 @@ export async function loadGroupContext(db: SupabaseClient, groupId: number): Pro
       reliabilityScore: m.reliability_score === null ? null : Number(m.reliability_score),
       preferredTone: m.preferred_tone,
       avgHoursToPay: m.avg_hours_to_pay === null ? null : Number(m.avg_hours_to_pay),
+      notes: m.notes,
     })),
     openSplits: (splits.data ?? []).map((s) => ({
       id: s.id,

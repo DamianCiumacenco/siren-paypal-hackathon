@@ -2,12 +2,19 @@ import { Api } from 'grammy';
 import type { ToolSet } from 'ai';
 import type { Config } from '../../config.js';
 import { getDb } from '../../db/client.js';
+import { createHistoryStore } from '../../db/history.js';
+import { createMemoryStore } from '../../db/memory.js';
 import { createDmStore } from '../../db/split_members.js';
 import { createSplitStore } from '../../db/splits.js';
 import { getPayPalTools } from '../../paypal/toolkit.js';
 import type { AgentContext } from '../types.js';
+import { createFetchGroupHistoryTool } from './fetch_group_history.js';
+import { createGetMemberProfileTool } from './get_member_profile.js';
 import { scopePayPalTools } from './paypal_scoped.js';
+import { createRememberPreferenceTool } from './remember_preference.js';
+import { createScheduleFollowupTool } from './schedule_followup.js';
 import { createSendSplitInvoicesTool } from './send_split_invoices.js';
+import { createSummariseDebtTool } from './summarise_debt.js';
 import { createTelegramDmTool, type SendDm } from './telegram_dm.js';
 
 export interface ToolDeps {
@@ -36,6 +43,14 @@ export function getAllTools(context: AgentContext, deps: ToolDeps): ToolSet {
   const scoped = scopePayPalTools(getPayPalTools(deps.config), { context, store });
   const tools: ToolSet = Object.fromEntries(Object.entries(scoped).filter(([name]) => AGENT_PAYPAL_TOOLS.includes(name)));
   tools.telegram_dm = createTelegramDmTool({ context, store, sendDm });
+
+  const history = createHistoryStore(db);
+  const memory = createMemoryStore(db);
+  tools.fetch_group_history = createFetchGroupHistoryTool({ context, store: history });
+  tools.get_member_profile = createGetMemberProfileTool({ context, store: memory });
+  tools.remember_preference = createRememberPreferenceTool({ context, store: memory });
+  tools.schedule_followup = createScheduleFollowupTool({ context, store: history });
+  tools.summarise_debt = createSummariseDebtTool({ context, store: history });
   // Only a real person can start a split (never a scheduled run or webhook).
   if (context.sender) {
     tools.send_split_invoices = createSendSplitInvoicesTool({

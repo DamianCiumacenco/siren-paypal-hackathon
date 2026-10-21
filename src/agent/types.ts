@@ -29,6 +29,7 @@ export interface GroupContext {
     reliabilityScore?: number | null;
     preferredTone?: 'chill' | 'neutral' | 'direct' | null;
     avgHoursToPay?: number | null;
+    notes?: string | null;
   }[];
   openSplits: {
     id: string;

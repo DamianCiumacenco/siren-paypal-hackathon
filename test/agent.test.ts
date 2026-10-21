@@ -155,7 +155,7 @@ describe('buildSystemPrompt', () => {
     );
     expect(prompt).toContain('You are being called from: user_message');
     expect(prompt).toContain('sender country: IE');
-    expect(prompt).toContain('Sender: Damian');
+    expect(prompt).toContain('Sender: Damian [user_id 1]');
     expect(prompt).toContain('Current time: 2026-10-21T12:00:00.000Z');
     expect(prompt).toContain('Mike [user_id 3]: reliability 0.30, avg 70h to pay, tone direct');
     expect(prompt).toContain('6.00 EUR each');

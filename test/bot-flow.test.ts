@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentInput } from '../src/agent/types.js';
 import type { AgentOutput } from '../src/agent/run.js';
 import { createBot, type BotDeps } from '../src/bot/index.js';
-import { agentPrompt } from '../src/bot/handlers/message.js';
+import { agentPrompt, plainText } from '../src/bot/handlers/message.js';
 import type { SplitForSending, SplitStore } from '../src/db/splits.js';
 import { safeErrorMessage, type Logger } from '../src/lib/safe-error.js';
 import { botInfo, callbackUpdate, captureApi, DAMIAN, GROUP, JAY, textUpdate } from './helpers/telegram.js';
@@ -99,6 +99,8 @@ describe('which messages reach the agent', () => {
     ['/split@siren_test_bot €10 pizza', '/split €10 pizza'],
     ['/status', '/status'],
     ['/nag', '/nag'],
+    ['/siren about Jay', '/siren about Jay'],
+    ['/siren why', '/siren why'],
     ['@siren_test_bot who owes what?', 'who owes what?'],
   ])('%s → agent', (text, expected) => {
     expect(agentPrompt(ctxFor(textUpdate(text)))).toBe(expected);
@@ -110,6 +112,14 @@ describe('which messages reach the agent', () => {
 
   it('replies to the bot reach the agent', () => {
     expect(agentPrompt(ctxFor(textUpdate('yes include Mike', { replyToBot: true })))).toBe('yes include Mike');
+  });
+});
+
+describe('plainText', () => {
+  it('strips Markdown Telegram would show literally, keeps links and bullets', () => {
+    expect(plainText('**About Jay**\n## Profile\n- reliability `0.94`\n- pay: https://www.sandbox.paypal.com/invoice/p/#INV2_A__B')).toBe(
+      'About Jay\nProfile\n- reliability 0.94\n- pay: https://www.sandbox.paypal.com/invoice/p/#INV2_A__B',
+    );
   });
 });
 

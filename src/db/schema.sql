@@ -73,6 +73,10 @@ create index if not exists idx_splits_group_open       on splits(group_id) where
 create index if not exists idx_user_memory_user_group  on user_memory(user_id, group_id);
 create index if not exists idx_reasoning_log_group     on reasoning_log(group_id, created_at desc);
 
+-- The live tables pre-date this file (created from the original ARCHITECTURE.md SQL), so
+-- `create table if not exists` never added columns introduced later. Add them explicitly.
+alter table splits add column if not exists next_nag_at timestamptz;
+
 -- Milestone 7: 'draft' = proposed by the agent, waiting for the creator to tap ✅ Send.
 -- (`create table if not exists` won't change an existing table, so migrate the check explicitly.)
 alter table splits drop constraint if exists splits_status_check;
