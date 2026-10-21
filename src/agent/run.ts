@@ -13,12 +13,10 @@ import type { AgentInput, GroupContext } from './types.js';
 export const MAX_AGENT_STEPS = 6;
 
 /**
- * LLM retries per step. The AI SDK waits for the provider's retry-after / retry-after-ms
- * header when it's under 60s (Groq sends one on its 8k tokens/min limit), else backs off
- * exponentially. The default of 2 wasn't enough when tokens were still counted against
- * the previous minute.
+ * LLM retries per step for transient errors (5xx, network). 429s are handled before this,
+ * in src/llm/rate-limit.ts (waits on Groq's per-minute limit, fails fast on the daily one).
  */
-export const LLM_MAX_RETRIES = 5;
+export const LLM_MAX_RETRIES = 2;
 
 export interface AgentOutput {
   response: string;

@@ -2,7 +2,7 @@
 // throwaway group that is deleted at the end (every invoice it created is cancelled).
 //
 //   npm run agent:live                      # both scenarios, DMs are dry runs (printed, not sent)
-//   npm run agent:live -- --scenario split  # split | nag | memory
+//   npm run agent:live -- --scenario split  # split | nag | memory | tones | payment
 //   npm run agent:live -- --dm <telegramId> # really DM that Telegram user (must have /start-ed the bot)
 //
 // Groq free tier = 8k tokens/min: the script waits between scenarios.
@@ -14,7 +14,13 @@ import type { AgentInput } from '../src/agent/types.js';
 import { loadConfig } from '../src/config.js';
 import { getDb } from '../src/db/client.js';
 import { loadGroupContext } from '../src/db/group_context.js';
-import { insertReasoningLog } from '../src/db/reasoning_log.js';
+import { insertReasoningLog, lastReasoningLog } from '../src/db/reasoning_log.js';
+import { createMemoryStore } from '../src/db/memory.js';
+import { createPaymentStore } from '../src/db/payments.js';
+import { createInvoiceStore } from '../src/db/split_members.js';
+import { formatWhy } from '../src/bot/handlers/why.js';
+import { handleInvoicePaid } from '../src/memory/on-payment.js';
+import { dispatchWebhookEvent } from '../src/paypal/webhooks.js';
 import { createSplitStore } from '../src/db/splits.js';
 import { safeErrorMessage, type Logger } from '../src/lib/safe-error.js';
 import { getModel } from '../src/llm/providers.js';
@@ -39,6 +45,7 @@ const rand = () => Math.floor(Math.random() * 100_000);
 const FAKE_CHAT_ID = -1009999000000 - rand();
 const DAMIAN_TG = 999_100_000 + rand();
 const JAY_TG = realDmTarget ?? 999_200_000 + rand();
+const SEAN_TG = 999_300_000 + rand();
 
 // Supabase rows are untyped here (no generated DB types), so callers name the row shape.
 function must<T>(res: { data: unknown; error: { message: string } | null }, what: string): T {
@@ -94,6 +101,7 @@ try {
   for (const [tg, name, tone, score] of [
     [DAMIAN_TG, 'Damian', 'neutral', 0.9],
     [JAY_TG, 'Jay', 'direct', 0.3],
+    [SEAN_TG, 'Sean', 'chill', 0.94],
   ] as const) {
     const id = must<{ id: number }>(
       await db.from('users').insert({ telegram_user_id: tg, first_name: name }).select('id').single(),
@@ -105,8 +113,8 @@ try {
       .insert({ user_id: id, group_id: groupId, preferred_tone: tone, reliability_score: score, avg_hours_to_pay: 70 });
     if (mem.error) throw new Error(`insert memory failed: ${mem.error.message}`);
   }
-  const [damianId, jayId] = userIds as [number, number];
-  console.log(`Seeded group ${groupId}: Damian (sender), Jay (direct tone, reliability 0.3)\n`);
+  const [damianId, jayId, seanId] = userIds as [number, number, number];
+  console.log(`Seeded group ${groupId}: Damian (sender), Jay (direct, 0.3), Sean (chill, 0.94)\n`);
 
   // --- scenario: split ---------------------------------------------------------
   if (scenario === 'all' || scenario === 'split') {
@@ -290,6 +298,7 @@ try {
     memoryRuns++;
     check('about: used get_member_profile', used(about, 'get_member_profile'));
     check('about: reply cites the learned profile (0.94 / 94% / 25th)', /0\.94|94\s?%|25th/.test(about.response));
+    console.log(`  full about reply:\n${about.response.split('\n').map((l) => `  | ${l}`).join('\n')}`);
     check('about: no internal ids shown', !/user[ _]?(id)?\s*:?\s*\d|split_member_id|[0-9a-f]{8}-[0-9a-f]{4}-/i.test(about.response));
     await new Promise((r) => setTimeout(r, 25_000));
 
@@ -320,8 +329,117 @@ try {
     check('debt: reply quotes the tool\'s figure for Jay', expected !== undefined && debt.response.includes(expected.amount.split(' ')[0]!));
   }
 
+  // --- scenario: tones (success criterion 7) + /siren why (criterion 5) ------------
+  let tonesRuns = 0;
+  if (scenario === 'all' || scenario === 'tones') {
+    if (scenario === 'all') {
+      console.log('\n(waiting 60s for the Groq tokens-per-minute window)\n');
+      await new Promise((r) => setTimeout(r, 60_000));
+    }
+    console.log('=== tones: scheduled run, Jay (direct, 0.3) and Sean (chill, 0.94) both unpaid 50h');
+    // Earlier scenarios (memory) change Jay's profile; reset both so the tones differ by design.
+    await db.from('user_memory').update({ reliability_score: 0.3, preferred_tone: 'direct', avg_hours_to_pay: 90, notes: null }).eq('user_id', jayId).eq('group_id', groupId);
+    await db.from('user_memory').update({ reliability_score: 0.94, preferred_tone: 'chill', avg_hours_to_pay: 5, notes: null }).eq('user_id', seanId).eq('group_id', groupId);
+    // Earlier scenarios in this run may have reminded Jay minutes ago; the real 24h limit
+    // (enforced in the tools) would then correctly refuse. Simulate a day passing.
+    const dayAgo = new Date(Date.now() - 30 * 3_600_000).toISOString();
+    for (const uid of [jayId, seanId]) {
+      await db.from('split_members').update({ last_reminded_at: dayAgo }).eq('user_id', uid).not('last_reminded_at', 'is', null);
+    }
+    const split = must<{ id: string }>(
+      await db
+        .from('splits')
+        .insert({ group_id: groupId, creator_user_id: damianId, description: 'golf', total_amount: 30, per_person_amount: 10, currency: 'EUR', status: 'open', created_at: new Date(Date.now() - 50 * 3_600_000).toISOString() })
+        .select('id')
+        .single(),
+      'insert golf split',
+    );
+    const links: Record<string, string> = {};
+    for (const [uid, name] of [[jayId, 'Jay'], [seanId, 'Sean']] as const) {
+      const created = await executeToolkit<{ id?: string; href?: string }>(paypal.create_invoice!, {
+        currency_code: 'EUR',
+        note: 'Siren agent live test — will be cancelled',
+        primary_recipients: [{ billing_info: { name: { given_name: name } } }],
+        items: [{ name: 'golf', quantity: '1', unit_amount: { currency_code: 'EUR', value: '10.00' } }],
+      });
+      const inv = created.id ?? created.href!.split('/').pop()!;
+      createdInvoices.add(inv);
+      links[name] = (await executeToolkit<{ href: string }>(paypal.send_invoice!, { invoice_id: inv, send_to_recipient: false })).href;
+      await db.from('split_members').insert({
+        split_id: split.id, user_id: uid, display_name: name, status: 'sent', reminders_sent: 0,
+        last_reminded_at: new Date(Date.now() - 30 * 3_600_000).toISOString(), paypal_invoice_id: inv, payment_link: links[name],
+      });
+    }
+    const before = sent.length;
+    const out = await agent({
+      trigger: 'scheduled_run',
+      userMessage: '[internal] Split "golf" has 2 unpaid members, opened 50h ago. Decide what to do.',
+      context: { groupId, chatId: FAKE_CHAT_ID, splitId: split.id },
+    });
+    tonesRuns++;
+    const jayDm = sent.slice(before).find((d) => d.to === JAY_TG)?.text;
+    const seanDm = sent.slice(before).find((d) => d.to === SEAN_TG)?.text;
+    console.log(`  Jay DM:  ${jayDm ?? '(none)'}\n  Sean DM: ${seanDm ?? '(none)'}\n`);
+    check('tones: both Jay and Sean were DMed', jayDm !== undefined && seanDm !== undefined);
+    check('tones: each DM has that person\'s own pay link', Boolean(jayDm?.includes(links.Jay!) && seanDm?.includes(links.Sean!)));
+    // Compare with names and links removed, so "Hey Jay" vs "Hey Sean" alone doesn't count.
+    const core = (t: string | undefined, name: string, link: string) => (t ?? '').replace(link, '').replace(new RegExp(name, 'gi'), '').replace(/\W+/g, ' ').trim().toLowerCase();
+    check('tones: different wording for direct Jay vs chill Sean (names/links removed)', jayDm !== undefined && seanDm !== undefined && core(jayDm, 'Jay', links.Jay!) !== core(seanDm, 'Sean', links.Sean!));
+    check('tones: the direct reminder is not the chill "no rush" one', !/no rush|when you get a sec/i.test(jayDm ?? 'no rush'));
+
+    console.log('=== /siren why (from reasoning_log, no LLM)');
+    const why = formatWhy(await lastReasoningLog(db, groupId));
+    console.log(why.split('\n').map((l) => `  | ${l}`).join('\n'));
+    check('why: shows real steps with tool calls', /Step 1/.test(why) && /→ telegram_dm/.test(why));
+    check('why: no pay links, DM wording, invoice numbers or ids', !/https?:|INV2-|[0-9a-f]{8}-[0-9a-f]{4}-|user_id/.test(why) && !why.includes(jayDm?.slice(0, 20) ?? '∅'));
+  }
+
+  // --- scenario: payment webhook → memory → settle → group post (no LLM) -----------
+  if (scenario === 'all' || scenario === 'payment') {
+    console.log('=== payment: INVOICING.INVOICE.PAID for Jay, then Sean (real DB, deterministic)');
+    const split = must<{ id: string }>(
+      await db
+        .from('splits')
+        .insert({ group_id: groupId, creator_user_id: damianId, description: 'darts', total_amount: 24, per_person_amount: 8, currency: 'EUR', status: 'open', created_at: new Date(Date.now() - 5 * 3_600_000).toISOString() })
+        .select('id')
+        .single(),
+      'insert darts split',
+    );
+    const fakeInv = (n: string) => `INV2-LIVE-${n}-${rand()}`;
+    const jayInv = fakeInv('JAY');
+    const seanInv = fakeInv('SEAN');
+    await db.from('split_members').insert([
+      { split_id: split.id, user_id: jayId, display_name: 'Jay', status: 'sent', paypal_invoice_id: jayInv },
+      { split_id: split.id, user_id: seanId, display_name: 'Sean', status: 'sent', paypal_invoice_id: seanInv },
+    ]);
+    const invoices = createInvoiceStore(db);
+    const posts: string[] = [];
+    const onPaid = (inv: string) =>
+      handleInvoicePaid(inv, { payments: createPaymentStore(db), memory: createMemoryStore(db), postToGroup: async (_c, t) => void posts.push(t) });
+    // Same logic as routes/paypal.ts: the hook runs only on the delivery that marked it paid.
+    const deliver = async (inv: string) => {
+      const r = await dispatchWebhookEvent({ id: `WH-${rand()}`, event_type: 'INVOICING.INVOICE.PAID', create_time: new Date().toISOString(), resource: { invoice: { id: inv } } }, invoices);
+      if (r.handled && r.updated > 0) await onPaid(inv);
+      return r;
+    };
+    await deliver(jayInv);
+    const jayMem = must<{ reliability_score: unknown; total_splits: number; preferred_tone: string }>(
+      await db.from('user_memory').select('reliability_score, total_splits, preferred_tone').eq('user_id', jayId).eq('group_id', groupId).single(),
+      'read jay memory',
+    );
+    console.log(`  posts: ${JSON.stringify(posts)}\n  Jay memory after paying in ~5h: ${JSON.stringify(jayMem)}`);
+    check('payment: Jay marked paid and the group told "1/2 paid"', posts[0]?.includes('Jay paid 8.00 EUR for "darts" — 1/2 paid.') === true);
+    check('payment: Jay\'s memory recomputed from his record', jayMem.reliability_score !== null && jayMem.total_splits >= 1);
+    const retry = await deliver(jayInv);
+    check('payment: PayPal retry of the same event changes nothing', retry.handled && retry.updated === 0 && posts.length === 1);
+    await deliver(seanInv);
+    const settled = must<{ status: string }>(await db.from('splits').select('status').eq('id', split.id).single(), 'read split');
+    check('payment: last payment settles the split + 🎉 post', settled.status === 'settled' && posts[1]?.includes('is settled') === true);
+  }
+
   const logs = must<unknown[]>(await db.from('reasoning_log').select('id').eq('group_id', groupId), 'read log');
-  const expectedRuns = (scenario === 'all' ? 2 : scenario === 'memory' ? 0 : 1) + memoryRuns;
+  const expectedRuns =
+    (scenario === 'all' ? 2 : scenario === 'split' || scenario === 'nag' ? 1 : 0) + memoryRuns + tonesRuns;
   check('every agent run persisted to reasoning_log', logs.length === expectedRuns);
 } catch (err) {
   console.error(`\nLive run failed: ${safeErrorMessage(err)}`);

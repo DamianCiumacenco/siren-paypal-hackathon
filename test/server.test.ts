@@ -188,6 +188,7 @@ describe('Telegram webhook mode: errors never reach Fastify', () => {
       runAgent: async () => ({ response: '', thoughts: [] }),
       splits: {} as never,
       sendSplit: async () => ({ dmed: [], linkInGroup: [], failed: [] }),
+      lastReasoning: async () => null,
       log: { info: capture, warn: capture, error: capture },
     });
     bot.api.config.use(async () => ({ ok: true, result: true }) as never);

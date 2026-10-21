@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { PaymentStats, Share } from '../memory/scoring.js';
 
 export type Tone = 'chill' | 'neutral' | 'direct';
 
@@ -18,6 +19,11 @@ export interface MemberProfile {
 }
 
 export interface MemoryStore {
+  /** Every share this user had in this group's confirmed splits (for scoring). */
+  paymentRecord(userId: number, groupId: number): Promise<Share[]>;
+  /** Write recomputed stats; tone only if given (caller checks tone_locked). */
+  saveStats(userId: number, groupId: number, stats: PaymentStats, tone?: Tone): Promise<void>;
+  isToneLocked(userId: number, groupId: number): Promise<boolean>;
   /** null if the user isn't a member of this group (no user_memory row). */
   getProfile(userId: number, groupId: number): Promise<MemberProfile | null>;
   updatePreference(userId: number, groupId: number, update: { preferredTone?: Tone; notes?: string }): Promise<boolean>;
@@ -27,6 +33,45 @@ const n = (v: unknown) => (v === null || v === undefined ? null : Number(v));
 
 export function createMemoryStore(db: SupabaseClient): MemoryStore {
   return {
+    async paymentRecord(userId, groupId) {
+      const { data, error } = await db
+        .from('split_members')
+        .select('status, paid_at, splits!inner(created_at, group_id, status)')
+        .eq('user_id', userId)
+        .eq('splits.group_id', groupId)
+        .in('splits.status', ['open', 'settled'])
+        .returns<{ status: string; paid_at: string | null; splits: { created_at: string } }[]>();
+      if (error) throw new Error(`paymentRecord(${userId}) failed: ${error.message}`);
+      return data.map((r) => ({ createdAt: r.splits.created_at, paidAt: r.paid_at, status: r.status }));
+    },
+
+    async saveStats(userId, groupId, stats, tone) {
+      const { error } = await db
+        .from('user_memory')
+        .update({
+          total_splits: stats.totalSplits,
+          total_paid_ontime: stats.totalPaidOnTime,
+          avg_hours_to_pay: stats.avgHoursToPay,
+          reliability_score: stats.reliabilityScore,
+          ...(tone ? { preferred_tone: tone } : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('group_id', groupId);
+      if (error) throw new Error(`saveStats(${userId}) failed: ${error.message}`);
+    },
+
+    async isToneLocked(userId, groupId) {
+      const { data, error } = await db
+        .from('user_memory')
+        .select('tone_locked')
+        .eq('user_id', userId)
+        .eq('group_id', groupId)
+        .maybeSingle();
+      if (error) throw new Error(`isToneLocked(${userId}) failed: ${error.message}`);
+      return Boolean(data?.tone_locked);
+    },
+
     async getProfile(userId, groupId) {
       const { data: row, error } = await db
         .from('user_memory')
@@ -90,7 +135,8 @@ export function createMemoryStore(db: SupabaseClient): MemoryStore {
 
     async updatePreference(userId, groupId, update) {
       const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      if (update.preferredTone) patch.preferred_tone = update.preferredTone;
+      // An explicitly chosen tone wins over the reliability-based auto tone from now on.
+      if (update.preferredTone) Object.assign(patch, { preferred_tone: update.preferredTone, tone_locked: true });
       if (update.notes !== undefined) patch.notes = update.notes;
       const { data, error } = await db
         .from('user_memory')

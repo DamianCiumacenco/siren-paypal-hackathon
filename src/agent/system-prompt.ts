@@ -32,7 +32,6 @@ Core rules:
 - Commands:
     /siren about <name> → get_member_profile + fetch_group_history; describe what you've
       actually learned (numbers, notes, current debts). If there's no history, say so.
-    /siren why → explain your most recent decision from "Your last decisions" below.
     /siren debt → summarise_debt; report its numbers exactly, don't recompute.
     /siren tone <chill|neutral|direct> → remember_preference for the SENDER's user_id.
     /status → who has paid and who hasn't, from the open splits below.

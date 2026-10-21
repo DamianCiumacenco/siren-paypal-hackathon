@@ -342,7 +342,9 @@ reliability = (0.6 * on_time_ratio) + (0.4 * speed_score)
   speed_score   = clamp(1 - (avg_hours_to_pay / 168), 0, 1)
 ```
 
-Auto preferred tone (overridable with `/siren tone`):
+Which shares count: resolved ones only — paid, or unpaid past the 72h window (late). Shares still inside their window don't count yet; cancelled never. No resolved shares → reliability null (not 0). Implemented in `src/memory/scoring.ts`, always recomputed from scratch (idempotent).
+
+Auto preferred tone (overridable with `/siren tone`; an explicitly set tone sets `user_memory.tone_locked` and is never auto-overwritten):
 - `> 0.8` → chill
 - `0.4–0.8` → neutral
 - `< 0.4` → direct
@@ -367,13 +369,15 @@ Bot     card    "New split: 6.00 EUR each, 3 people … [✅ Send requests] [❌
         → group summary
 ```
 
-### Flow B — Payment received
+### Flow B — Payment received (milestone 10: deterministic, no LLM)
 ```
-PayPal webhook → verify sig → update split_members → trigger memory update
-  → runAgent({ trigger: 'webhook', userMessage: '[internal] Jay paid €6 for football, 7h after request' })
-    Step 1  tool  remember_preference({ user: jay, update: {...} })
-    Step 2  tool  telegram group post "🎉 Jay paid €6 — 7/10 in"
+PayPal webhook → verify sig → mark split_member paid (idempotent)
+  → only on the delivery that changed the row (routes/paypal.ts onInvoicePaid):
+    recomputeMemory(user, group)   full recompute from payment record (memory/scoring.ts), auto tone unless tone_locked
+    settle split if nobody still owes
+    group post "✅ Jay paid 6.00 EUR for "football" — 7/10 paid." (+ "🎉 … settled")
 ```
+Hook failures are logged (safe) and answered 200: a PayPal retry updates 0 rows and skips the hook; recompute is idempotent so the scheduler can heal memory later.
 
 ### Flow C — Scheduled nag
 ```
@@ -393,6 +397,12 @@ Command → runAgent
   Step 2  tool  fetch_group_history({ user: jay, limit: 5 })
   Step 3  implicit respond "Jay — pays on avg within 6h, 94% reliable, prefers chill reminders.
           Last 5 splits all paid, median 5h. Current: €6 outstanding for football, sent 2h ago."
+```
+
+### Flow E — `/siren why` (milestone 10: no LLM)
+```
+Command → latest reasoning_log row for the group → formatWhy(): Step N: thought → tool call (safe args) → result
+Redacted for the group: links, invoice numbers, uuids/ids removed; DM and note text never shown.
 ```
 
 ---

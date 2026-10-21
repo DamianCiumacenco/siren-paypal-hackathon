@@ -145,6 +145,6 @@ export async function dispatchWebhookEvent(event: PayPalWebhookEvent, store: Inv
     eventType === 'INVOICING.INVOICE.PAID'
       ? await store.markInvoicePaid(invoiceId, event.create_time ? new Date(event.create_time) : new Date())
       : await store.markInvoiceCancelled(invoiceId);
-  // Memory update + agent run on payment hook in here at milestones 5/10.
+  // Memory update + group post happen in the route's onInvoicePaid hook (src/memory/on-payment.ts).
   return { handled: true, eventType, invoiceId, updated };
 }

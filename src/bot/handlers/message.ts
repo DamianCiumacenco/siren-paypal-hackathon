@@ -2,6 +2,8 @@ import { APICallError, RetryError } from 'ai';
 import { InlineKeyboard } from 'grammy';
 import { findSplitProposal, type AgentOutput } from '../../agent/run.js';
 import type { AgentInput } from '../../agent/types.js';
+import { toGroupText } from '../../lib/group-text.js';
+import { LongRateLimitError } from '../../llm/rate-limit.js';
 import { logError, type Logger } from '../../lib/safe-error.js';
 import type { SirenContext } from '../context.js';
 
@@ -41,23 +43,15 @@ export function agentPrompt(ctx: SirenContext): string | undefined {
   return undefined;
 }
 
-/**
- * Replies are sent as plain text (no parse_mode), so Markdown the model slips in despite
- * the prompt would show up literally. Strip the common bits: **bold**, __bold__, `code`,
- * # headings.
- */
-export function plainText(text: string): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/__(.+?)__/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
-    .trim();
-}
-
-function isRateLimit(err: unknown): boolean {
+/** User-facing message for an agent failure (never the raw error). */
+export function failureMessage(err: unknown): string {
   const e = RetryError.isInstance(err) ? err.lastError : err;
-  return APICallError.isInstance(e) && e.statusCode === 429;
+  if (e instanceof LongRateLimitError) {
+    const mins = Math.ceil(e.waitMs / 60_000);
+    return `I've used up my AI quota for now (free plan daily limit). Try again in about ${mins >= 90 ? `${Math.round(mins / 60)} hours` : `${mins} minutes`}.`;
+  }
+  if (APICallError.isInstance(e) && e.statusCode === 429) return "I'm over my AI rate limit right now — try again in a minute.";
+  return 'Sorry, something went wrong on my side. Try again in a minute.';
 }
 
 /** Card under the agent's reply. Text comes from the tool result (code), not the LLM. */
@@ -123,19 +117,13 @@ export function createAgentMessageHandler(deps: MessageHandlerDeps) {
             userMessage: prompt,
             context: { groupId, chatId, sender },
           });
-          await ctx.reply(plainText(output.response), { reply_parameters: { message_id: ctx.message!.message_id } });
+          await ctx.reply(toGroupText(output.response), { reply_parameters: { message_id: ctx.message!.message_id } });
           const card = splitCard(output, sender.firstName);
           if (card) await ctx.reply(card.text, { reply_markup: card.keyboard });
         } catch (err) {
           // Ids only — never the prompt, names or the raw SDK error (see lib/safe-error.ts).
           logError(deps.log, err, 'agent run failed', { chatId, updateId: ctx.update.update_id });
-          await ctx
-            .reply(
-              isRateLimit(err)
-                ? "I'm over my AI rate limit right now — try again in a minute."
-                : 'Sorry, something went wrong on my side. Try again in a minute.',
-            )
-            .catch(() => {});
+          await ctx.reply(failureMessage(err)).catch(() => {});
         } finally {
           busy.delete(chatId);
         }

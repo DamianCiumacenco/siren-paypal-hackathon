@@ -6,9 +6,13 @@ import { loadConfig, type Config } from './config.js';
 import { getDb } from './db/client.js';
 import { runAgent } from './agent/run.js';
 import { createChatRegistry } from './db/chats.js';
+import { createMemoryStore } from './db/memory.js';
+import { createPaymentStore } from './db/payments.js';
+import { lastReasoningLog } from './db/reasoning_log.js';
 import { createInvoiceStore } from './db/split_members.js';
 import { createSplitStore } from './db/splits.js';
 import { logError, safeErrorMessage, type Logger } from './lib/safe-error.js';
+import { handleInvoicePaid } from './memory/on-payment.js';
 import { sendSplitInvoices } from './paypal/split_invoices.js';
 import { getPayPalTools } from './paypal/toolkit.js';
 import { SIMULATOR_WEBHOOK_ID, type InvoiceStore } from './paypal/webhooks.js';
@@ -58,6 +62,7 @@ async function main(): Promise<void> {
   const paypalTools = getPayPalTools(config);
   const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {
     registry: createChatRegistry(db),
+    lastReasoning: (groupId) => lastReasoningLog(db, groupId),
     runAgent: (input) => runAgent(input),
     splits,
     sendSplit: (split) =>
@@ -76,7 +81,16 @@ async function main(): Promise<void> {
   const webhookMode = Boolean(config.PUBLIC_URL);
   app = await buildServer({
     telegram: webhookMode ? { bot, secretToken: telegramSecret } : undefined,
-    paypal: { webhookIds, store },
+    paypal: {
+      webhookIds,
+      store,
+      onInvoicePaid: (invoiceId) =>
+        handleInvoicePaid(invoiceId, {
+          payments: createPaymentStore(db),
+          memory: createMemoryStore(db),
+          postToGroup: async (chatId, text) => void (await bot.api.sendMessage(chatId, text)),
+        }),
+    },
   });
   if (config.PAYPAL_WEBHOOK_ALLOW_SIMULATOR) app.log.warn('Accepting PayPal Webhook Simulator events (testing only)');
   await app.listen({ port: config.PORT, host: '0.0.0.0' });

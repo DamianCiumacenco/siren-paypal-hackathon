@@ -17,8 +17,9 @@ export function createFetchGroupHistoryTool(deps: { context: AgentContext; store
       const splits = await deps.store.splits(deps.context.groupId, { limit, userId: user_id });
       return {
         ok: true,
+        // No split ids: they're not needed here (open split ids are in the group context)
+        // and the model sometimes repeats ids it sees in group replies.
         splits: splits.map((s) => ({
-          split_id: s.id,
           description: s.description,
           status: s.status,
           each: `${s.perPersonAmount.toFixed(2)} ${s.currency}`,

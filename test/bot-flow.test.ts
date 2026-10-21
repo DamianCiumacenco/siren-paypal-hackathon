@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentInput } from '../src/agent/types.js';
 import type { AgentOutput } from '../src/agent/run.js';
 import { createBot, type BotDeps } from '../src/bot/index.js';
-import { agentPrompt, plainText } from '../src/bot/handlers/message.js';
+import { agentPrompt } from '../src/bot/handlers/message.js';
+import { plainText, toGroupText } from '../src/lib/group-text.js';
 import type { SplitForSending, SplitStore } from '../src/db/splits.js';
 import { safeErrorMessage, type Logger } from '../src/lib/safe-error.js';
 import { botInfo, callbackUpdate, captureApi, DAMIAN, GROUP, JAY, textUpdate } from './helpers/telegram.js';
@@ -76,6 +77,7 @@ function setup(overrides: Partial<BotDeps> = {}) {
     runAgent: vi.fn(async (_input: AgentInput) => proposalOutput()),
     splits,
     sendSplit: vi.fn(async () => ({ dmed: ['Jay'], linkInGroup: [], failed: [] })),
+    lastReasoning: vi.fn(async () => null),
     log,
     background: (p) => void pending.push(p),
     ...overrides,
@@ -120,6 +122,21 @@ describe('plainText', () => {
     expect(plainText('**About Jay**\n## Profile\n- reliability `0.94`\n- pay: https://www.sandbox.paypal.com/invoice/p/#INV2_A__B')).toBe(
       'About Jay\nProfile\n- reliability 0.94\n- pay: https://www.sandbox.paypal.com/invoice/p/#INV2_A__B',
     );
+  });
+});
+
+describe('toGroupText (agent replies posted in the group)', () => {
+  it('removes internal ids and invoice numbers, and keeps pay links out of the group', () => {
+    expect(
+      toGroupText(
+        '**Jay** (user 23) owes €6 — invoice INV2-AB12-CD34, split 9cb06ec0-993b-44de-99c5-c9515a54a344.\nPay: https://www.sandbox.paypal.com/invoice/p/#INV2AB12CD34 [user_id 23]',
+      ),
+    ).toBe('Jay owes €6 — invoice , split.\nPay: [pay link sent by DM]');
+  });
+
+  it('leaves normal text, amounts, times and other links alone', () => {
+    const text = 'Jay paid €6.00 in 5 hours (2 of 3 paid). Details: https://example.com/x';
+    expect(toGroupText(text)).toBe(text);
   });
 });
 
@@ -193,6 +210,28 @@ describe('message → runAgent → reply + confirmation card', () => {
     await send(textUpdate('/start', { from: JAY as typeof DAMIAN, chat: { id: JAY.id, type: 'private', first_name: 'Jay' } }));
     expect(deps.registry.registerUser).toHaveBeenCalledWith({ telegramUserId: JAY.id, firstName: 'Jay', username: undefined });
     expect(sent()[0]!.text).toMatch(/I'm Siren/);
+  });
+});
+
+describe('/siren why', () => {
+  it('reads reasoning_log directly — no agent run, no Groq tokens', async () => {
+    const lastReasoning = vi.fn(async () => ({
+      trigger: 'user_message',
+      createdAt: '2026-10-21T14:02:00Z',
+      thoughts: [],
+      finalResponse: 'Drafted the pizza split.',
+    }));
+    const { deps, send, sent } = setup({ lastReasoning });
+    await send(textUpdate('/siren why'));
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(lastReasoning).toHaveBeenCalledWith(7);
+    expect(sent()[0]!.text).toContain('Result: Drafted the pizza split.');
+  });
+
+  it('other /siren commands still go to the agent', async () => {
+    const { deps, send } = setup({ runAgent: vi.fn(async () => ({ response: 'ok', thoughts: [] })) });
+    await send(textUpdate('/siren about Jay'));
+    expect(deps.runAgent).toHaveBeenCalled();
   });
 });
 

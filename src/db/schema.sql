@@ -51,6 +51,7 @@ create table if not exists user_memory (
   avg_hours_to_pay  numeric,
   reliability_score numeric,
   preferred_tone    text default 'neutral' check (preferred_tone in ('chill','neutral','direct')),
+  tone_locked       boolean default false,      -- true once set explicitly; auto-picker leaves it alone
   total_splits      int default 0,
   total_paid_ontime int default 0,
   notes             text,
@@ -76,6 +77,7 @@ create index if not exists idx_reasoning_log_group     on reasoning_log(group_id
 -- The live tables pre-date this file (created from the original ARCHITECTURE.md SQL), so
 -- `create table if not exists` never added columns introduced later. Add them explicitly.
 alter table splits add column if not exists next_nag_at timestamptz;
+alter table user_memory add column if not exists tone_locked boolean default false;
 
 -- Milestone 7: 'draft' = proposed by the agent, waiting for the creator to tap ✅ Send.
 -- (`create table if not exists` won't change an existing table, so migrate the check explicitly.)

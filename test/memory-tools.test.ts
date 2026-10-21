@@ -118,6 +118,9 @@ function memoryStore(p: MemberProfile | null = profile) {
   return {
     getProfile: vi.fn(async (_u: number, g: number) => (g === GROUP ? p : null)),
     updatePreference: vi.fn(async () => true),
+    paymentRecord: vi.fn(async () => []),
+    saveStats: vi.fn(async () => {}),
+    isToneLocked: vi.fn(async () => false),
   } satisfies MemoryStore;
 }
 

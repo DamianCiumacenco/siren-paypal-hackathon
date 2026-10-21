@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { logError } from '../lib/safe-error.js';
 import {
   dispatchWebhookEvent,
   readWebhookHeaders,
@@ -13,6 +14,12 @@ export interface PayPalRouteOptions {
   webhookIds: string[];
   store: InvoiceStore;
   fetchCertPem?: CertFetcher;
+  /**
+   * Runs once per invoice, on the delivery that first marked it paid (memory update,
+   * settle, group post). Failures are logged and still answered 200: the member is
+   * already marked paid, so a PayPal retry would update 0 rows and skip this anyway.
+   */
+  onInvoicePaid?: (invoiceId: string) => Promise<unknown>;
 }
 
 // POST /webhook/paypal. Status codes matter: PayPal retries any non-2xx for up to 3 days,
@@ -52,6 +59,13 @@ export async function paypalRoutes(app: FastifyInstance, opts: PayPalRouteOption
     }
 
     const result = await dispatchWebhookEvent(event, opts.store); // throws → 500 → PayPal retries
+    if (result.handled && result.eventType === 'INVOICING.INVOICE.PAID' && result.updated > 0 && opts.onInvoicePaid) {
+      try {
+        await opts.onInvoicePaid(result.invoiceId);
+      } catch (err) {
+        logError(request.log, err, 'post-payment update failed', { eventId: event.id, invoiceId: result.invoiceId });
+      }
+    }
     request.log.info(
       { eventId: event.id, simulator: verdict.webhookId === 'WEBHOOK_ID', ...result },
       'PayPal webhook processed',

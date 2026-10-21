@@ -11,3 +11,23 @@ export async function insertReasoningLog(db: SupabaseClient, record: ReasoningRe
   });
   if (error) throw new Error(`insertReasoningLog failed: ${error.message}`);
 }
+
+export interface ReasoningLogEntry {
+  trigger: string | null;
+  createdAt: string;
+  thoughts: unknown;
+  finalResponse: string | null;
+}
+
+/** Most recent agent decision in this group (for `/siren why`). */
+export async function lastReasoningLog(db: SupabaseClient, groupId: number): Promise<ReasoningLogEntry | null> {
+  const { data, error } = await db
+    .from('reasoning_log')
+    .select('trigger, created_at, thoughts, final_response')
+    .eq('group_id', groupId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`lastReasoningLog(${groupId}) failed: ${error.message}`);
+  return data ? { trigger: data.trigger, createdAt: data.created_at, thoughts: data.thoughts, finalResponse: data.final_response } : null;
+}

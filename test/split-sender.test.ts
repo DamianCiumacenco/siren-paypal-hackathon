@@ -1,14 +1,11 @@
-import { APICallError, tool, type ToolSet } from 'ai';
+import { tool, type ToolSet } from 'ai';
 import { GrammyError } from 'grammy';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { runAgent } from '../src/agent/run.js';
 import type { SplitForSending, SplitStore } from '../src/db/splits.js';
 import type { Logger } from '../src/lib/safe-error.js';
 import { formatSendSummary, sendSplitInvoices } from '../src/paypal/split_invoices.js';
 import { executeToolkit } from '../src/paypal/toolkit.js';
-import { textStep } from './helpers/mock-model.js';
-import { MockLanguageModelV4 } from 'ai/test';
 
 const silentLog: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
@@ -123,33 +120,4 @@ describe('rate-limit retries', () => {
     await expect(executeToolkit(t, {}, { retries: 2, baseDelayMs: 1 })).rejects.toThrow(/429/);
   });
 
-  it('runAgent waits for Groq retry-after and completes instead of failing the run', async () => {
-    let calls = 0;
-    const ok = textStep('done');
-    const model = new MockLanguageModelV4({
-      doGenerate: async () => {
-        calls++;
-        if (calls < 3) {
-          throw new APICallError({
-            message: 'Rate limit reached',
-            url: 'https://api.groq.com/openai/v1/chat/completions',
-            requestBodyValues: {},
-            statusCode: 429,
-            responseHeaders: { 'retry-after': '0.05' }, // seconds, like Groq
-            isRetryable: true,
-          });
-        }
-        return ok;
-      },
-    });
-    const started = Date.now();
-    const out = await runAgent(
-      { trigger: 'user_message', userMessage: 'hi', context: { groupId: 1, chatId: -1 } },
-      { model, tools: {}, groupContext: undefined, persist: async () => {} },
-    );
-    expect(out.response).toBe('done');
-    expect(calls).toBe(3);
-    // Waited ~2×50ms (retry-after), not the 2s+4s exponential default.
-    expect(Date.now() - started).toBeLessThan(1500);
-  });
 });
