@@ -4,7 +4,10 @@ import type { UserFromGetMe } from 'grammy/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBot, telegramWebhookSecret } from '../src/bot/index.js';
 import type { InvoiceStore } from '../src/paypal/webhooks.js';
-import { acceptedWebhookIds, buildServer, localTelegramMode } from '../src/server.js';
+import { HttpError } from 'grammy';
+import { telegramStatus } from '../src/lib/telegram-status.js';
+import { safeErrorMessage, type Logger } from '../src/lib/safe-error.js';
+import { acceptedWebhookIds, buildServer, localTelegramMode, setupTelegram } from '../src/server.js';
 import { invoiceEvent, signedWebhookHeaders, TEST_CERT_PEM } from './helpers/paypal-signing.js';
 
 const TOKEN = '123456:TEST_TOKEN';
@@ -229,5 +232,90 @@ describe('localTelegramMode (local run while production is deployed)', () => {
   });
   it('TELEGRAM_FORCE_POLLING=true takes over deliberately', () => {
     expect(localTelegramMode('https://siren-x7k2.onrender.com/webhook/telegram', true)).toBe('polling');
+  });
+});
+
+describe('setupTelegram: Telegram problems never crash the server', () => {
+  const TOKEN_URL = 'request to https://api.telegram.org/bot123456789:AAFakeTokenForTestsOnly_abcdefghijklmnop/getWebhookInfo failed, reason: ETIMEDOUT';
+  // What grammy throws on a network failure: HttpError wrapping a fetch error whose message has the token URL.
+  const netError = () => new HttpError("Network request for 'getWebhookInfo' failed!", new Error(TOKEN_URL));
+
+  function fakeBot(api: { setWebhook?: () => Promise<unknown>; getWebhookInfo?: () => Promise<{ url: string }>; deleteWebhook?: () => Promise<unknown> }) {
+    const started = { value: false };
+    const bot = {
+      api: { setWebhook: async () => true, getWebhookInfo: async () => ({ url: '' }), deleteWebhook: async () => true, ...api },
+      start: () => ((started.value = true), new Promise(() => {})),
+    };
+    return { bot: bot as never, started };
+  }
+  function capture() {
+    const logs: string[] = [];
+    const log: Logger = {
+      info: (o, m) => logs.push(JSON.stringify({ ...o, msg: m })),
+      warn: (o, m) => logs.push(JSON.stringify({ ...o, msg: m })),
+      error: (o, m) => logs.push(JSON.stringify({ ...o, msg: m })),
+    };
+    return { logs, log };
+  }
+  const base = { secretToken: 's', forcePolling: false, retryDelayMs: () => 1 };
+
+  it('production: setWebhook failing at boot is retried in the background until it works', async () => {
+    let calls = 0;
+    const { bot } = fakeBot({ setWebhook: async () => { if (++calls < 3) throw netError(); return true; } });
+    const { logs, log } = capture();
+    expect(await setupTelegram({ ...base, bot, webhookUrl: 'https://siren-5brb.onrender.com/webhook/telegram', log })).toBe('webhook');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toBe(3);
+    expect(telegramStatus.state).toBe('webhook');
+    expect(logs.join()).toContain('Telegram setWebhook failed — retrying');
+    expect(logs.join()).toContain('Telegram webhook registered');
+  });
+
+  it('PII/secrets: the bot token never reaches the logs (it leaked once via the fetch error URL)', async () => {
+    const { bot } = fakeBot({ getWebhookInfo: async () => { throw netError(); } });
+    const { logs, log } = capture();
+    await setupTelegram({ ...base, bot, log });
+    expect(logs.join()).not.toContain('AAFakeTokenForTestsOnly');
+    expect(logs.join()).toContain('bot<redacted>/getWebhookInfo');
+    expect(logs.join()).toContain('ETIMEDOUT'); // the useful part survives
+  });
+
+  it('local: Telegram unreachable → passive (never risks deleting the prod webhook), no crash', async () => {
+    const del = { called: false };
+    const { bot, started } = fakeBot({ getWebhookInfo: async () => { throw netError(); }, deleteWebhook: async () => (del.called = true) });
+    const { log } = capture();
+    expect(await setupTelegram({ ...base, bot, log })).toBe('passive');
+    expect(del.called).toBe(false);
+    expect(started.value).toBe(false);
+    expect(telegramStatus.state).toBe('passive');
+  });
+
+  it('local: prod webhook live → passive; none → polling', async () => {
+    const { log } = capture();
+    const live = fakeBot({ getWebhookInfo: async () => ({ url: 'https://siren-5brb.onrender.com/webhook/telegram' }) });
+    expect(await setupTelegram({ ...base, bot: live.bot, log })).toBe('passive');
+    const none = fakeBot({});
+    expect(await setupTelegram({ ...base, bot: none.bot, log })).toBe('polling');
+    expect(none.started.value).toBe(true);
+  });
+
+  it('GET /health reports the Telegram state', async () => {
+    telegramStatus.state = 'retrying';
+    const app = await buildServer({ paypal: { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } } });
+    const res = await app.inject({ method: 'GET', url: '/health' });
+    expect(res.json()).toMatchObject({ ok: true, telegram: 'retrying' });
+    await app.close();
+  });
+});
+
+describe('PII/secrets: redactSecrets via safeErrorMessage', () => {
+  it.each([
+    ['https://api.telegram.org/bot987654321:AAH-secret_part_1234567890abcdefXYZ/sendMessage', 'bot<redacted>/sendMessage'],
+    ['token 987654321:AAH-secret_part_1234567890abcdefXYZ leaked', '<redacted-token> leaked'],
+    ['GET /v1/x?key=AIzaSyFakeGoogleKey123&alt=json', 'key=<redacted>&alt=json'],
+    ['Authorization: Bearer eyJhbGciOi.payload.sig', 'Bearer <redacted>'],
+    ['nvapi-AbCdEf1234567890xyz and gsk_AbCdEf1234567890xyz', 'nvapi-<redacted> and gsk_<redacted>'],
+  ])('%s', (input, expected) => {
+    expect(safeErrorMessage(new Error(input))).toContain(expected);
   });
 });

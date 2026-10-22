@@ -12,7 +12,26 @@ import { GrammyError, HttpError } from 'grammy';
  */
 
 const MAX_CHARS = 300;
-const clip = (s: string) => (s.length > MAX_CHARS ? `${s.slice(0, MAX_CHARS)}…` : s);
+
+/**
+ * Secrets that can hide inside error MESSAGES. Telegram puts the bot token in the request
+ * path (https://api.telegram.org/bot<TOKEN>/method), and a network failure's message
+ * includes that URL — this leaked the token into Render's logs once. Every logged message
+ * passes through here.
+ */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/\bbot\d{5,}:[A-Za-z0-9_-]{20,}/g, 'bot<redacted>') // Telegram API URL path
+    .replace(/\b\d{5,}:[A-Za-z0-9_-]{30,}\b/g, '<redacted-token>') // bare Telegram token
+    .replace(/\b(api[_-]?key|key|token|access_token|secret)=([^&\s"']+)/gi, '$1=<redacted>') // query params
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/g, 'Bearer <redacted>')
+    .replace(/\b(nvapi-|gsk_|sk-)[A-Za-z0-9_-]{10,}/g, '$1<redacted>'); // NVIDIA / Groq / OpenAI-style keys
+}
+
+const clip = (s: string) => {
+  const safe = redactSecrets(s);
+  return safe.length > MAX_CHARS ? `${safe.slice(0, MAX_CHARS)}…` : safe;
+};
 
 /** Provider error text from an APICallError body ({"error":{"message":...}}), never the request. */
 function providerMessage(err: APICallError): string | undefined {

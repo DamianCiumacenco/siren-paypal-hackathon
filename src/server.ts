@@ -15,6 +15,7 @@ import { lastReasoningLog } from './db/reasoning_log.js';
 import { createInvoiceStore } from './db/split_members.js';
 import { createSplitStore } from './db/splits.js';
 import { logError, safeErrorMessage, type Logger } from './lib/safe-error.js';
+import { telegramStatus } from './lib/telegram-status.js';
 import { setLlmLogger } from './llm/providers.js';
 import { handleInvoicePaid } from './memory/on-payment.js';
 import { sendSplitInvoices } from './paypal/split_invoices.js';
@@ -50,6 +51,80 @@ export function acceptedWebhookIds(config: Pick<Config, 'PAYPAL_WEBHOOK_ID' | 'P
  */
 export function localTelegramMode(existingWebhookUrl: string, forcePolling: boolean): 'polling' | 'passive' {
   return existingWebhookUrl && !forcePolling ? 'passive' : 'polling';
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Wire the bot to Telegram without ever taking the server down.
+ * - Production (webhookUrl set): setWebhook, retried with backoff (2s → 60s cap) forever in
+ *   the background until it succeeds. The scheduler and /health run meanwhile.
+ * - Local: ask Telegram whether production owns the bot (getWebhookInfo, retried a few
+ *   times). If that can't be answered, stay passive: never risk deleting prod's webhook.
+ */
+export async function setupTelegram(opts: {
+  bot: Bot<SirenContext>;
+  webhookUrl?: string;
+  secretToken: string;
+  forcePolling: boolean;
+  log: Logger;
+  retryDelayMs?: (attempt: number) => number;
+}): Promise<'webhook' | 'polling' | 'passive'> {
+  const delay = opts.retryDelayMs ?? ((n) => Math.min(60_000, 2000 * 2 ** n));
+
+  if (opts.webhookUrl) {
+    const register = async () => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await opts.bot.api.setWebhook(opts.webhookUrl!, { secret_token: opts.secretToken });
+          telegramStatus.state = 'webhook';
+          opts.log.info({ attempt }, 'Telegram webhook registered');
+          return;
+        } catch (err) {
+          telegramStatus.state = 'retrying';
+          logError(opts.log, err, 'Telegram setWebhook failed — retrying', { attempt });
+          await sleep(delay(attempt));
+        }
+      }
+    };
+    void register(); // background: the server keeps serving while Telegram is unreachable
+    return 'webhook';
+  }
+
+  let existing: string | undefined;
+  for (let attempt = 0; attempt < 4 && existing === undefined; attempt++) {
+    try {
+      existing = (await opts.bot.api.getWebhookInfo()).url ?? '';
+    } catch (err) {
+      logError(opts.log, err, 'Telegram getWebhookInfo failed', { attempt });
+      if (attempt < 3) await sleep(delay(attempt));
+    }
+  }
+  if (existing === undefined) {
+    telegramStatus.state = 'passive';
+    opts.log.warn({}, 'Telegram unreachable — staying PASSIVE (no polling, no scheduler) rather than risk the production webhook');
+    return 'passive';
+  }
+  if (localTelegramMode(existing, opts.forcePolling) === 'passive') {
+    telegramStatus.state = 'passive';
+    opts.log.warn(
+      { webhookHost: new URL(existing).host },
+      'Production Telegram webhook is live — local instance is PASSIVE (no polling, no scheduler). ' +
+        'Set TELEGRAM_FORCE_POLLING=true to take over; the next deploy/restart re-registers the webhook.',
+    );
+    return 'passive';
+  }
+  // Local dev: deleteWebhook first because Telegram refuses getUpdates while one is set.
+  await opts.bot.api.deleteWebhook().catch((err) => logError(opts.log, err, 'Telegram deleteWebhook failed'));
+  telegramStatus.state = 'polling';
+  opts.bot
+    .start({ onStart: (me) => opts.log.info({}, `Telegram long polling as @${me.username}`) })
+    .catch((err) => {
+      // Polling died (e.g. another instance took over → 409). Log it; keep serving HTTP.
+      telegramStatus.state = 'passive';
+      logError(opts.log, err, 'Telegram long polling stopped');
+    });
+  return 'polling';
 }
 
 /** Build the Fastify app without listening — tests use `app.inject()` against this. */
@@ -114,31 +189,17 @@ async function main(): Promise<void> {
   if (config.PAYPAL_WEBHOOK_ALLOW_SIMULATOR) app.log.warn('Accepting PayPal Webhook Simulator events (testing only)');
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
 
-  if (webhookMode) {
-    // Deployed: tell Telegram to push updates to us.
-    await bot.api.setWebhook(`${config.PUBLIC_URL}/webhook/telegram`, { secret_token: telegramSecret });
-    app.log.info('Telegram webhook registered');
-  }
-  let passive = false;
-  if (!webhookMode) {
-    const existing = (await bot.api.getWebhookInfo()).url ?? '';
-    passive = localTelegramMode(existing, config.TELEGRAM_FORCE_POLLING) === 'passive';
-    if (passive) {
-      app.log.warn(
-        { webhookHost: new URL(existing).host },
-        'Production Telegram webhook is live — local instance is PASSIVE (no polling, no scheduler). ' +
-          'Set TELEGRAM_FORCE_POLLING=true to take over; the next deploy/restart re-registers the webhook.',
-      );
-    } else {
-      // Local dev: no public URL, so pull updates instead. deleteWebhook first because
-      // Telegram refuses getUpdates while a webhook is set.
-      await bot.api.deleteWebhook();
-      bot.start({ onStart: (me) => log.info({}, `Telegram long polling as @${me.username}`) }).catch((err) => {
-        logError(log, err, 'Telegram long polling stopped');
-        process.exit(1);
-      });
-    }
-  }
+  // Telegram setup runs AFTER the server is listening and can never crash it: a network
+  // blip at boot (seen on Render's first deploy) used to exit(1). setupTelegram retries
+  // with backoff and reports its state on /health.
+  const mode = await setupTelegram({
+    bot,
+    webhookUrl: webhookMode ? `${config.PUBLIC_URL}/webhook/telegram` : undefined,
+    secretToken: telegramSecret,
+    forcePolling: config.TELEGRAM_FORCE_POLLING,
+    log,
+  });
+  const passive = mode === 'passive';
 
   // Autonomous nag flow (Flow C): the agent checks open splits on NAG_CRON_INTERVAL.
   // Only on the instance that owns Telegram (see localTelegramMode).

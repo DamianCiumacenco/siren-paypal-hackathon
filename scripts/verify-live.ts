@@ -20,8 +20,9 @@ const t0 = Date.now();
 const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(90_000) }).catch((e: Error) => e);
 if (health instanceof Error) check('GET /health', false, health.message);
 else {
-  const body = (await health.json().catch(() => ({}))) as { ok?: boolean; uptimeSeconds?: number };
+  const body = (await health.json().catch(() => ({}))) as { ok?: boolean; uptimeSeconds?: number; telegram?: string };
   check('GET /health', health.ok && body.ok === true, `${health.status} in ${Date.now() - t0}ms, uptime ${body.uptimeSeconds}s`);
+  check('Telegram wired up (webhook mode)', body.telegram === 'webhook', `telegram: ${body.telegram ?? '(not reported)'}`);
 }
 
 // 2. Telegram delivers to this deployment, with no recent delivery errors
