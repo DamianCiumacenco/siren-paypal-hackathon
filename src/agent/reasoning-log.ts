@@ -11,7 +11,8 @@ export interface Thought {
   toolCalls: { tool: string; input: unknown }[];
   toolResults: { tool: string; output: unknown }[];
   toolErrors: { tool: string; error: string }[];
-  tokens: { input?: number; output?: number };
+  /** cached = input tokens the provider served from its prompt cache (undefined = not reported). */
+  tokens: { input?: number; output?: number; cached?: number };
   /** Model that actually answered (with failover, may differ step to step). */
   model?: string;
 }
@@ -42,7 +43,26 @@ export function summariseSteps(steps: ReadonlyArray<StepResult<ToolSet>>): Thoug
     toolErrors: s.content
       .filter((p) => p.type === 'tool-error')
       .map((p) => ({ tool: p.toolName, error: String(clip(p.error instanceof Error ? p.error.message : p.error)) })),
-    tokens: { input: s.usage.inputTokens, output: s.usage.outputTokens },
+    tokens: {
+      input: s.usage.inputTokens,
+      output: s.usage.outputTokens,
+      cached: s.usage.inputTokenDetails?.cacheReadTokens,
+    },
     model: s.response?.modelId,
   }));
+}
+
+/** Per-run token/cache summary for logs (ids and numbers only — no prompt content). */
+export function usageSummary(thoughts: Thought[]) {
+  const input = thoughts.reduce((n, t) => n + (t.tokens.input ?? 0), 0);
+  const reported = thoughts.filter((t) => t.tokens.cached !== undefined);
+  const cached = reported.reduce((n, t) => n + (t.tokens.cached ?? 0), 0);
+  return {
+    steps: thoughts.length,
+    inputTokens: input,
+    // null = no provider in this run reported cache data (e.g. Groq gpt-oss on the free tier)
+    cachedTokens: reported.length ? cached : null,
+    cacheHitPct: reported.length && input ? Math.round((cached / input) * 100) : null,
+    models: [...new Set(thoughts.map((t) => t.model).filter(Boolean))],
+  };
 }

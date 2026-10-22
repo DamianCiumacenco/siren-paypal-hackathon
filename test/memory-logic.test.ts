@@ -158,7 +158,8 @@ describe('/siren why (no LLM, redacted for the group)', () => {
       ],
       toolResults: [{ tool: 'telegram_dm', output: { ok: true, sent_to: 'Jay', kind: 'reminder' } }],
       toolErrors: [],
-      tokens: {},
+      tokens: { input: 3100, cached: 2048 },
+      model: 'openai/gpt-oss-120b',
     },
     {
       step: 2,
@@ -172,7 +173,7 @@ describe('/siren why (no LLM, redacted for the group)', () => {
 
   it('shows the real steps: thought → tool call → result', () => {
     expect(text).toContain('My last decision (scheduled check, 21 Oct 14:02 UTC)');
-    expect(text).toContain('Step 1\nthought: Jay [id] has reliability 0.3 and owes €6, link [link]');
+    expect(text).toContain('Step 1 (openai/gpt-oss-120b · 3.1k in, 2.0k cached)\nthought: Jay [id] has reliability 0.3 and owes €6, link [link]');
     expect(text).toContain('→ telegram_dm (kind: reminder)\n← ✓ sent_to: Jay, kind: reminder');
     expect(text).toContain('→ send_invoice_reminder\n← ✗ rate limited: Jay was reminded at 2026-10-21');
     expect(text).toContain('Result: Reminded Jay.');

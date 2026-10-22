@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MAX_AGENT_STEPS, runAgent } from '../src/agent/run.js';
 import type { ReasoningRecord } from '../src/agent/reasoning-log.js';
-import { buildSystemPrompt } from '../src/agent/system-prompt.js';
+import { buildContextBlock, buildUserTurn, STABLE_SYSTEM_PROMPT } from '../src/agent/system-prompt.js';
+import { usageSummary } from '../src/agent/reasoning-log.js';
 import type { AgentInput, GroupContext } from '../src/agent/types.js';
 import { scriptedModel, textStep, toolCallStep } from './helpers/mock-model.js';
 
@@ -92,9 +93,13 @@ describe('runAgent', () => {
     expect(record.thoughts[1]).toMatchObject({ step: 2, text: 'Reminded Mike about the €6 for football.' });
   });
 
-  it('sends the system prompt with group context to the model', async () => {
+  it('sends the stable system prompt first and the group context in the user turn', async () => {
     const model = scriptedModel([textStep('Nothing to do.')]);
     await runAgent(input, { model, tools: {}, groupContext, persist: async () => {} });
+    const [system, user] = model.doGenerateCalls[0]!.prompt;
+    expect(system).toEqual({ role: 'system', content: STABLE_SYSTEM_PROMPT });
+    expect(user!.role).toBe('user');
+    expect(JSON.stringify(user)).toContain('<context>');
     const prompt = JSON.stringify(model.doGenerateCalls[0]!.prompt);
     expect(prompt).toContain('You are Siren');
     expect(prompt).toContain(`split_member_id ${MEMBER_ID}`);
@@ -146,27 +151,43 @@ describe('runAgent', () => {
   });
 });
 
-describe('buildSystemPrompt', () => {
-  it('fills in trigger, sender country and the group snapshot', () => {
-    const prompt = buildSystemPrompt(
-      { ...input, trigger: 'user_message', context: { ...input.context, sender: { telegramUserId: 1, firstName: 'Damian', userId: 1 } } },
+describe('prompt layout (provider prompt caching)', () => {
+  const sender = { telegramUserId: 1, firstName: 'Damian', userId: 1 };
+
+  it('system prompt is byte-identical whatever the trigger, sender, time or group (cacheable prefix)', () => {
+    // The system prompt is a constant; nothing per-call may leak into it.
+    expect(STABLE_SYSTEM_PROMPT).not.toMatch(/\{\{|user_message: |\d{4}-\d{2}-\d{2}T/);
+    const a = buildUserTurn({ ...input, trigger: 'user_message', context: { ...input.context, sender } }, groupContext);
+    const b = buildUserTurn(input, undefined, new Date('2030-01-01T00:00:00Z'));
+    expect(a).not.toBe(b); // the per-call part does change…
+    expect(a.startsWith('<context>') && b.startsWith('<context>')).toBe(true); // …and lives in the user turn
+  });
+
+  it('context block carries trigger, sender, country, time and the group snapshot', () => {
+    const block = buildContextBlock(
+      { ...input, trigger: 'user_message', context: { ...input.context, sender } },
       groupContext,
       new Date('2026-10-21T12:00:00Z'),
     );
-    expect(prompt).toContain('You are being called from: user_message');
-    expect(prompt).toContain('sender country: IE');
-    expect(prompt).toContain('Sender: Damian [user_id 1]');
-    expect(prompt).toContain('Current time: 2026-10-21T12:00:00.000Z');
-    expect(prompt).toContain('Mike [user_id 3]: reliability 0.30, avg 70h to pay, tone direct');
-    expect(prompt).toContain('6.00 EUR each');
-    expect(prompt).not.toContain('{{');
+    expect(block).toContain('Trigger: user_message');
+    expect(block).toContain('Sender: Damian [user_id 1]');
+    expect(block).toContain('Sender country: IE');
+    expect(block).toContain('Current time: 2026-10-21T12:00:00.000Z');
+    expect(block).toContain('Mike [user_id 3]: reliability 0.30, avg 70h to pay, tone direct');
+    expect(block).toContain('6.00 EUR each');
+    expect(block.endsWith('</context>')).toBe(true);
+  });
+
+  it('user turn = context block, then the message', () => {
+    const turn = buildUserTurn(input, undefined);
+    expect(turn).toMatch(/<\/context>\n\n\[internal\] Split "football"/);
+    expect(turn).toContain('Group context: (not loaded)');
   });
 
   it('keeps the Irish voice confined to reminders', () => {
-    const prompt = buildSystemPrompt(input, undefined);
-    expect(prompt).toMatch(/light Irish .* ONLY inside reminder DMs/);
-    expect(prompt).toContain('neutral English for everything else');
-    expect(prompt).toContain('Group context: (not loaded)');
+    expect(STABLE_SYSTEM_PROMPT).toMatch(/light Irish .* ONLY inside reminder DMs/);
+    expect(STABLE_SYSTEM_PROMPT).toContain('neutral English for everything else');
+    expect(STABLE_SYSTEM_PROMPT).not.toContain('are coming'); // stale "more tools are coming" line removed
   });
 
   it('flags split members that cannot be DMed', () => {
@@ -174,6 +195,29 @@ describe('buildSystemPrompt', () => {
       ...groupContext,
       openSplits: [{ ...groupContext.openSplits[0]!, members: [{ ...groupContext.openSplits[0]!.members[0]!, userId: null }] }],
     };
-    expect(buildSystemPrompt(input, ctx)).toContain('not linked to a Telegram user — cannot DM');
+    expect(buildContextBlock(input, ctx)).toContain('not linked to a Telegram user — cannot DM');
+  });
+});
+
+describe('usageSummary (cache telemetry, no prompt content)', () => {
+  const step = (input: number, cached?: number, model = 'openai/gpt-oss-120b') => ({
+    step: 1,
+    toolCalls: [],
+    toolResults: [],
+    toolErrors: [],
+    tokens: { input, output: 10, cached },
+    model,
+  });
+  it('reports cached share when providers report it', () => {
+    expect(usageSummary([step(3000, 2000), step(3200, 2900, 'gemini-3.5-flash')])).toEqual({
+      steps: 2,
+      inputTokens: 6200,
+      cachedTokens: 4900,
+      cacheHitPct: 79,
+      models: ['openai/gpt-oss-120b', 'gemini-3.5-flash'],
+    });
+  });
+  it('null (not 0) when no provider reported cache data — "unknown" is not "miss"', () => {
+    expect(usageSummary([step(3000)])).toMatchObject({ cachedTokens: null, cacheHitPct: null });
   });
 });

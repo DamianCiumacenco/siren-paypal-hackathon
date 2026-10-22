@@ -51,13 +51,12 @@ export function getAllTools(context: AgentContext, deps: ToolDeps): ToolSet {
   tools.remember_preference = createRememberPreferenceTool({ context, store: memory });
   tools.schedule_followup = createScheduleFollowupTool({ context, store: history });
   tools.summarise_debt = createSummariseDebtTool({ context, store: history });
-  // Only a real person can start a split (never a scheduled run or webhook).
-  if (context.sender) {
-    tools.send_split_invoices = createSendSplitInvoicesTool({
-      context,
-      store: createSplitStore(db),
-      senderUserId: context.sender.userId,
-    });
-  }
+  // Always present so every call sends the same tool list (cacheable prompt prefix); it
+  // refuses when there's no sender — only a real person can start a split.
+  tools.send_split_invoices = createSendSplitInvoicesTool({
+    context,
+    store: createSplitStore(db),
+    senderUserId: context.sender?.userId,
+  });
   return tools;
 }

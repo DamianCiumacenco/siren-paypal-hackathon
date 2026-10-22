@@ -1,4 +1,5 @@
 import { schedule, type ScheduledTask } from 'node-cron';
+import { usageSummary } from '../agent/reasoning-log.js';
 import type { AgentOutput } from '../agent/run.js';
 import type { AgentInput } from '../agent/types.js';
 import { REMINDER_COOLDOWN_MS } from '../agent/tools/telegram_dm.js';
@@ -112,6 +113,7 @@ export async function runScheduledPass(deps: SchedulerDeps): Promise<PassResult>
         userMessage: scheduledPrompt(split, now),
         context: { groupId: split.groupId, chatId: split.telegramChatId, splitId: split.id },
       });
+      deps.log.info({ splitId: split.id, trigger: 'scheduled_run', ...usageSummary(out.thoughts) }, 'agent run finished');
       // Quiet decisions (wait / do nothing) stay in reasoning_log — /siren why shows them.
       // Posting them every pass would spam the group, especially on a 5-minute demo cron.
       if (actedOnSomeone(out)) {

@@ -87,8 +87,12 @@ export function resolveParticipants(names: string[], members: GroupMember[], sen
 export interface SendSplitInvoicesDeps {
   context: AgentContext;
   store: SplitStore;
-  /** users.id of the sender (set by the bot middleware). */
-  senderUserId: number;
+  /**
+   * users.id of the sender (set by the bot middleware). Undefined on scheduled/webhook
+   * runs: the tool is still offered (same tool list on every call keeps the prompt prefix
+   * cacheable) but refuses — only a person can start a split.
+   */
+  senderUserId?: number;
 }
 
 export function createSendSplitInvoicesTool(deps: SendSplitInvoicesDeps) {
@@ -101,9 +105,11 @@ export function createSendSplitInvoicesTool(deps: SendSplitInvoicesDeps) {
     inputSchema: sendSplitInvoicesInput,
     execute: async (input): Promise<SplitProposal> => {
       if (proposed) return { ok: false, error: 'a split was already proposed in this run' };
+      const senderUserId = deps.senderUserId;
+      if (senderUserId === undefined) return { ok: false, error: 'only a person can start a split, not a scheduled run' };
 
       const members = await deps.store.groupMembers(deps.context.groupId);
-      const r = resolveParticipants(input.participants, members, deps.senderUserId);
+      const r = resolveParticipants(input.participants, members, senderUserId);
       if (!r.ok) return r;
       if (r.members.length === 0) return { ok: false, error: 'nobody else to invoice — the sender can’t pay themselves' };
 
@@ -114,7 +120,7 @@ export function createSendSplitInvoicesTool(deps: SendSplitInvoicesDeps) {
       const perPerson = Math.round((input.total_amount / people) * 100) / 100;
       const splitId = await deps.store.createDraft({
         groupId: deps.context.groupId,
-        creatorUserId: deps.senderUserId,
+        creatorUserId: senderUserId,
         description: input.description,
         totalAmount: input.total_amount,
         perPersonAmount: perPerson,

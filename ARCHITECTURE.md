@@ -57,7 +57,8 @@ siren/
 │   │       └── callback.ts          # inline-button taps (confirm/cancel split)
 │   ├── llm/
 │   │   ├── providers.ts             # Groq primary, Gemini fallback — model factory
-│   │   └── cache.ts                 # 1h cache on identical prompts
+│   │   ├── failover.ts              # Groq → Gemini → NVIDIA chain
+│   │   └── rate-limit.ts            # per-provider 429 handling (no response cache — see milestone 12)
 │   ├── paypal/
 │   │   ├── toolkit.ts               # init PayPalAgentToolkit, export tool list
 │   │   └── webhooks.ts              # sig verify + dispatch (NOT in agent toolkit — we own this)
@@ -422,7 +423,7 @@ Webhook subscription setup (manual, after Render deploys):
 | 8–9  | Remaining 5 custom tools: `fetch_group_history`, `get_member_profile`, `remember_preference`, `schedule_followup`, `summarise_debt` |
 | 10   | Memory logic — reliability score + tone picker + webhook → memory update |
 | 11   | Scheduler + autonomous nag flow |
-| 12   | ~~Gemini fallback wiring~~ (done early: Groq → Gemini → NVIDIA chain) + prompt cache |
+| 12   | ~~Gemini fallback wiring~~ (done early: Groq → Gemini → NVIDIA chain) + provider-side prompt caching layout (see "Milestone 12" below) |
 | 13   | Render deploy + UptimeRobot + full end-to-end on live URL |
 | 14   | Error handling, logging, retry policies, rate-limit enforcement in tools |
 | 15–16| Optional dashboard (open splits + reliability + reasoning log viewer) |
@@ -435,6 +436,19 @@ Build-order rule: **tests pass at each milestone** before moving on.
 
 ---
 
+## Milestone 12 — prompt caching (revised scope)
+
+**Original plan, scrapped:** "1h cache on identical prompts" (`llm/cache.ts`).
+**Why it was wrong for an agent:** a cached *response* replays a past decision without running its tools. A cache hit on "remind Jay" would post "Reminded Jay." while no DM goes out, and the reasoning log would record actions that never happened. Every agent prompt also carries the current time and live group state, so "identical prompts" would almost never occur, and when they did, replaying them would be wrong. **Lesson: cache what's stable (the prompt prefix), never an agent's decisions.**
+
+**What shipped instead: provider-side prompt caching layout.** Providers cache a long *identical prefix*; decisions are still computed fresh every call.
+- `system` = `STABLE_SYSTEM_PROMPT`: byte-identical on every call (no time, trigger, sender or ids).
+- Tools: the same set in the same order on every trigger (`send_split_invoices` is always offered and refuses without a sender).
+- User turn = `<context>` block (trigger, sender, country, time, group snapshot) + the message. Everything per-call lives here, after the prefix.
+- Telemetry: every step records `tokens.cached` (`usage.inputTokenDetails.cacheReadTokens`; undefined = provider didn't report it). Shown per step in `/siren why` ("3.1k in, 2.0k cached"), logged per run as `agent run finished {inputTokens, cachedTokens, cacheHitPct, models}`, and measured by `npm run agent:live -- --scenario cache`.
+
+**Measured (2026-10-22, free tiers):** 0 cached tokens on all three providers. Groq `gpt-oss-120b` returns no `prompt_tokens_details` at all (and requests are served from several regions: fra, lhr); Gemini `gemini-3.5-flash` and NVIDIA `nemotron-3-ultra` report `cached 0` even for an identical 5k-token prefix. So the expected 50–70% saving isn't available on these tiers. The layout is in place and the telemetry will show hits the day a provider caches (re-measure on the Groq Dev tier at milestone 13).
+
 ## Known risks + mitigations (updated)
 
 | Risk | Mitigation |
@@ -445,7 +459,7 @@ Build-order rule: **tests pass at each milestone** before moving on.
 | Agent spams group | Nag rate-limit (1/24h/user) enforced inside `telegram_dm` tool handler before send |
 | PayPal sandbox outage during demo | Pre-recorded backup clip on a known-good day |
 | Render cold start | UptimeRobot ping every 10 min |
-| Groq 1000 RPD limit | 1h prompt cache + Gemini fallback |
+| Groq free-tier limits (8k tokens/min, 200k/day) | Skip-without-LLM fast paths, LLM-free money paths, Groq → Gemini → NVIDIA failover. (A response cache was rejected — see Milestone 12.) |
 | Webhook sig mismatch | Log full headers on fail; test via PayPal Simulator before live sandbox events |
 | Memory writes stale | Agent `remember_preference` validated via zod; `preferred_tone` constrained to enum |
 | Vercel AI SDK telemetry leaking data | Telemetry not enabled (no exporter); steps are persisted to `reasoning_log` ourselves, tool outputs clipped to 2,000 chars |

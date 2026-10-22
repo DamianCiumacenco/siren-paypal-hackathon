@@ -1,5 +1,6 @@
 import { APICallError, RetryError } from 'ai';
 import { InlineKeyboard } from 'grammy';
+import { usageSummary } from '../../agent/reasoning-log.js';
 import { findSplitProposal, type AgentOutput } from '../../agent/run.js';
 import type { AgentInput } from '../../agent/types.js';
 import { ChatLock } from '../../lib/chat-lock.js';
@@ -126,6 +127,7 @@ export function createAgentMessageHandler(deps: MessageHandlerDeps) {
             userMessage: prompt,
             context: { groupId, chatId, sender },
           });
+          deps.log.info({ chatId, trigger: 'user_message', ...usageSummary(output.thoughts) }, 'agent run finished');
           await ctx.reply(toGroupText(output.response), { reply_parameters: { message_id: ctx.message!.message_id } });
           const card = splitCard(output, sender.firstName);
           if (card) await ctx.reply(card.text, { reply_markup: card.keyboard });

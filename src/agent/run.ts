@@ -5,7 +5,7 @@ import { loadGroupContext } from '../db/group_context.js';
 import { insertReasoningLog } from '../db/reasoning_log.js';
 import { getModel } from '../llm/providers.js';
 import { summariseSteps, type ReasoningRecord, type Thought } from './reasoning-log.js';
-import { buildSystemPrompt } from './system-prompt.js';
+import { buildUserTurn, STABLE_SYSTEM_PROMPT } from './system-prompt.js';
 import { getAllTools } from './tools/index.js';
 import type { AgentInput, GroupContext } from './types.js';
 
@@ -60,8 +60,9 @@ export async function runAgent(input: AgentInput, overrides: Partial<AgentDeps> 
 
   const result = await generateText({
     model: deps.model,
-    system: buildSystemPrompt(input, deps.groupContext),
-    prompt: input.userMessage,
+    // Stable prefix first (cacheable), everything per-call in the user turn — see system-prompt.ts.
+    system: STABLE_SYSTEM_PROMPT,
+    prompt: buildUserTurn(input, deps.groupContext),
     tools: deps.tools,
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
     maxRetries: LLM_MAX_RETRIES,

@@ -70,6 +70,17 @@ function setup() {
 }
 
 describe('send_split_invoices tool', () => {
+  it('refuses on scheduled/webhook runs (no sender) — offered anyway so the tool list never changes', async () => {
+    const store = { groupMembers: vi.fn(), createDraft: vi.fn() } as unknown as SplitStore;
+    const t = createSendSplitInvoicesTool({ context: { groupId: 7, chatId: -100 }, store });
+    const res = await t.execute!(
+      sendSplitInvoicesInput.parse({ description: 'x', total_amount: 10, currency: 'EUR', participants: ['Jay'] }),
+      { toolCallId: 't', messages: [] } as never,
+    );
+    expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/only a person/) });
+    expect(store.createDraft).not.toHaveBeenCalled();
+  });
+
   it('saves a DRAFT with equal shares incl. the sender, and invoices only the others', async () => {
     const { drafts, run } = setup();
     const res = await run({ description: 'football', total_amount: 60, currency: 'EUR', participants: ['Jay', 'Sean', '@mikey'] });

@@ -2,7 +2,7 @@
 // throwaway group that is deleted at the end (every invoice it created is cancelled).
 //
 //   npm run agent:live                      # both scenarios, DMs are dry runs (printed, not sent)
-//   npm run agent:live -- --scenario split  # split | nag | memory | tones | payment | scheduler
+//   npm run agent:live -- --scenario split  # split | nag | memory | tones | payment | scheduler | cache
 //   npm run agent:live -- --dm <telegramId> # really DM that Telegram user (must have /start-ed the bot)
 //   npm run agent:live -- --only gemini     # run the agent on one provider (groq | gemini | nvidia)
 //   npm run agent:live -- --switch-after 1  # bench Groq after N LLM calls (simulates its daily cap mid-run)
@@ -17,6 +17,7 @@ import { loadConfig } from '../src/config.js';
 import { getDb } from '../src/db/client.js';
 import { loadGroupContext } from '../src/db/group_context.js';
 import { insertReasoningLog, lastReasoningLog } from '../src/db/reasoning_log.js';
+import { usageSummary, type Thought } from '../src/agent/reasoning-log.js';
 import { createMemoryStore } from '../src/db/memory.js';
 import { createPaymentStore } from '../src/db/payments.js';
 import { createInvoiceStore } from '../src/db/split_members.js';
@@ -103,6 +104,7 @@ const sendDm: SendDm = async (to, text) => {
 };
 
 const createdInvoices = new Set<string>();
+const allThoughts: Thought[] = [];
 const checks: [string, boolean][] = [];
 const check = (name: string, ok: boolean) => {
   checks.push([name, ok]);
@@ -112,7 +114,8 @@ const check = (name: string, ok: boolean) => {
 function printRun(out: AgentOutput, seconds: number) {
   console.log(`Agent finished in ${seconds.toFixed(1)}s, ${out.thoughts.length} step(s)`);
   for (const t of out.thoughts) {
-    console.log(`  step ${t.step} [${t.model ?? '?'}] (${t.tokens.input ?? '?'} in / ${t.tokens.output ?? '?'} out tokens)`);
+    const cached = t.tokens.cached === undefined ? 'cache: not reported' : `${t.tokens.cached} cached`;
+    console.log(`  step ${t.step} [${t.model ?? '?'}] (${t.tokens.input ?? '?'} in / ${t.tokens.output ?? '?'} out tokens, ${cached})`);
     for (const c of t.toolCalls) console.log(`    → ${c.tool} ${JSON.stringify(c.input)}`);
     for (const r of t.toolResults) console.log(`    ← ${r.tool} ${JSON.stringify(r.output).slice(0, 220)}`);
     for (const e of t.toolErrors) console.log(`    ✗ ${e.tool} ${e.error}`);
@@ -138,6 +141,7 @@ async function agent(input: AgentInput) {
     persist: (r) => insertReasoningLog(db, r),
   });
   printRun(out, (Date.now() - started) / 1000);
+  allThoughts.push(...out.thoughts);
   return out;
 }
 
@@ -600,9 +604,33 @@ try {
     check('scheduler: pass 2 makes zero LLM calls (everyone reminded <24h / follow-up pending)', pass2.agentRuns === 0 && sent.length === sentBefore + dms.length);
   }
 
+  // --- scenario: cache (milestone 12) — does the stable prefix get reused? ------------
+  let cacheRuns = 0;
+  if (scenario === 'cache') {
+    console.log('=== cache: same group, two different questions back to back, per provider');
+    const sender = { telegramUserId: DAMIAN_TG, firstName: 'Damian', userId: damianId };
+    for (const slot of slots) {
+      const single = new FailoverModel([slot], log);
+      for (const q of ['/siren debt', '/status']) {
+        const before = Date.now();
+        const out = await runAgent(
+          { trigger: 'user_message', userMessage: q, context: { groupId, chatId: FAKE_CHAT_ID, sender } },
+          { model: single, tools: getAllTools({ groupId, chatId: FAKE_CHAT_ID, sender }, { config, sendDm }), groupContext: await loadGroupContext(db, groupId), persist: (r) => insertReasoningLog(db, r) },
+        ).catch((e: unknown) => { console.log(`  ${slot.name}: ${safeErrorMessage(e)}`); return undefined; });
+        if (!out) break;
+        cacheRuns++;
+        const u = usageSummary(out.thoughts);
+        console.log(`  ${slot.name} ${q}: ${((Date.now() - before) / 1000).toFixed(1)}s, ${u.inputTokens} in, cached ${u.cachedTokens ?? 'not reported'}${u.cacheHitPct !== null ? ` (${u.cacheHitPct}%)` : ''}`);
+        allThoughts.push(...out.thoughts);
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+    check('cache: token + cache telemetry recorded for every step', allThoughts.length > 0 && allThoughts.every((t) => t.tokens.input !== undefined));
+  }
+
   const logs = must<unknown[]>(await db.from('reasoning_log').select('id').eq('group_id', groupId), 'read log');
   const expectedRuns =
-    (scenario === 'all' ? 2 : scenario === 'split' || scenario === 'nag' ? 1 : 0) + memoryRuns + tonesRuns + schedulerRuns;
+    (scenario === 'all' ? 2 : scenario === 'split' || scenario === 'nag' ? 1 : 0) + memoryRuns + tonesRuns + schedulerRuns + cacheRuns;
   check('every agent run persisted to reasoning_log', logs.length === expectedRuns);
 } catch (err) {
   console.error(`\nLive run failed: ${safeErrorMessage(err)}`);
@@ -620,6 +648,7 @@ try {
     }).catch((err) => console.error(`Could not cancel ${id}: ${safeErrorMessage(err)}`));
   }
   console.log(`\nCleaned up seeded rows; cancelled ${createdInvoices.size} sandbox invoice(s).`);
+  if (allThoughts.length) console.log(`Prompt cache over this run: ${JSON.stringify(usageSummary(allThoughts))}`);
   const failed = checks.filter(([, ok]) => !ok).length;
   console.log(
     failed === 0 && process.exitCode !== 1 ? `ALL ${checks.length} CHECKS PASSED` : `${failed} CHECK(S) FAILED`,
