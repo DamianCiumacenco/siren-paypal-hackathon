@@ -52,7 +52,14 @@ const envSchema = z.object({
 
   // App
   PORT: z.coerce.number().int().positive().default(3000),
-  PUBLIC_URL: optional.pipe(z.url().optional()), // unset → bot uses long polling (local dev)
+  // Deployed URL (e.g. https://siren-xxxx.onrender.com). Set → Telegram webhook mode.
+  // Unset → local dev with long polling. Trailing slash stripped so URLs join cleanly.
+  PUBLIC_URL: optional.pipe(z.url().optional()).transform((v) => v?.replace(/\/+$/, '')),
+  // Local only: take Telegram over from a live production webhook (see server.ts).
+  TELEGRAM_FORCE_POLLING: z
+    .enum(['true', 'false', ''])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof envSchema>;

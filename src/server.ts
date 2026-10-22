@@ -40,6 +40,18 @@ export function acceptedWebhookIds(config: Pick<Config, 'PAYPAL_WEBHOOK_ID' | 'P
   return ids;
 }
 
+/**
+ * What a LOCAL instance (no PUBLIC_URL) should do about Telegram.
+ * Once Siren is deployed, Telegram has a webhook pointing at production. If a local
+ * `npm run dev` / `npm run test:startup` deleted it to start polling, the deployed bot
+ * would silently stop receiving messages; and both instances would run the scheduler
+ * against the same database. So locally we go 'passive' (HTTP only: no polling, no
+ * scheduler) unless the production webhook is absent or TELEGRAM_FORCE_POLLING=true.
+ */
+export function localTelegramMode(existingWebhookUrl: string, forcePolling: boolean): 'polling' | 'passive' {
+  return existingWebhookUrl && !forcePolling ? 'passive' : 'polling';
+}
+
 /** Build the Fastify app without listening — tests use `app.inject()` against this. */
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
@@ -106,20 +118,35 @@ async function main(): Promise<void> {
     // Deployed: tell Telegram to push updates to us.
     await bot.api.setWebhook(`${config.PUBLIC_URL}/webhook/telegram`, { secret_token: telegramSecret });
     app.log.info('Telegram webhook registered');
-  } else {
-    // Local dev: no public URL, so pull updates instead. deleteWebhook first because
-    // Telegram refuses getUpdates while a webhook is set.
-    await bot.api.deleteWebhook();
-    bot.start({ onStart: (me) => log.info({}, `Telegram long polling as @${me.username}`) }).catch((err) => {
-      logError(log, err, 'Telegram long polling stopped');
-      process.exit(1);
-    });
+  }
+  let passive = false;
+  if (!webhookMode) {
+    const existing = (await bot.api.getWebhookInfo()).url ?? '';
+    passive = localTelegramMode(existing, config.TELEGRAM_FORCE_POLLING) === 'passive';
+    if (passive) {
+      app.log.warn(
+        { webhookHost: new URL(existing).host },
+        'Production Telegram webhook is live — local instance is PASSIVE (no polling, no scheduler). ' +
+          'Set TELEGRAM_FORCE_POLLING=true to take over; the next deploy/restart re-registers the webhook.',
+      );
+    } else {
+      // Local dev: no public URL, so pull updates instead. deleteWebhook first because
+      // Telegram refuses getUpdates while a webhook is set.
+      await bot.api.deleteWebhook();
+      bot.start({ onStart: (me) => log.info({}, `Telegram long polling as @${me.username}`) }).catch((err) => {
+        logError(log, err, 'Telegram long polling stopped');
+        process.exit(1);
+      });
+    }
   }
 
   // Autonomous nag flow (Flow C): the agent checks open splits on NAG_CRON_INTERVAL.
+  // Only on the instance that owns Telegram (see localTelegramMode).
   const schedulerStore = createSchedulerStore(db);
   const memory = createMemoryStore(db);
-  const scheduler = startScheduler(
+  const scheduler = passive
+    ? undefined
+    : startScheduler(
     config.NAG_CRON_INTERVAL,
     () =>
       runScheduledPass({
@@ -134,7 +161,7 @@ async function main(): Promise<void> {
   );
 
   const shutdown = async () => {
-    await scheduler.stop();
+    await scheduler?.stop();
     if (bot.isRunning()) await bot.stop();
     await app?.close();
     process.exit(0);

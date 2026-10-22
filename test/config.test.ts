@@ -51,4 +51,14 @@ describe('parseConfig', () => {
   it('coerces PORT from string', () => {
     expect(parseConfig({ ...valid, PORT: '8080' }).PORT).toBe(8080);
   });
+
+  it('PUBLIC_URL: trailing slash stripped so webhook URLs join cleanly', () => {
+    expect(parseConfig({ ...valid, PUBLIC_URL: 'https://siren-x7k2.onrender.com/' }).PUBLIC_URL).toBe('https://siren-x7k2.onrender.com');
+    expect(() => parseConfig({ ...valid, PUBLIC_URL: 'not a url' })).toThrow(/PUBLIC_URL/);
+  });
+
+  it('TELEGRAM_FORCE_POLLING defaults to false', () => {
+    expect(parseConfig(valid).TELEGRAM_FORCE_POLLING).toBe(false);
+    expect(parseConfig({ ...valid, TELEGRAM_FORCE_POLLING: 'true' }).TELEGRAM_FORCE_POLLING).toBe(true);
+  });
 });

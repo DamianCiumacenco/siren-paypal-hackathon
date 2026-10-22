@@ -46,6 +46,13 @@ Use whenever a milestone changes `/webhook/paypal` handling. Do all the setup BE
 8. If the tunnel log shows `connection refused`, the server died: check server.log before asking the human to resend.
 9. Tear down: stop the Monitor, kill the server + cloudflared, confirm with `pgrep`. Put the event ids + results in the milestone commit message.
 
+## Runbook: production (Render free tier)
+- Deploy = push to `main` (Render auto-deploys from `render.yaml`). Free instance sleeps after 15 min idle; UptimeRobot pings `/health` every 5 min so the bot and scheduler stay up.
+- Env vars live in the Render dashboard (never in the repo). `PUBLIC_URL` = the service's own `https://….onrender.com` (Telegram webhook mode). Never set `PAYPAL_WEBHOOK_ALLOW_SIMULATOR` on Render.
+- After a deploy: `npm run verify:live -- <url>` (health, Telegram webhook target + errors, webhook auth). `npm run cache:report -- 24` = prompt-cache stats from what production recorded.
+- **Local runs while production is live are PASSIVE:** if Telegram's webhook is set, a local `npm run dev` / `test:startup` doesn't poll, doesn't delete the webhook and doesn't start the scheduler (it shares the prod database). To test locally on Telegram on purpose: `TELEGRAM_FORCE_POLLING=true`; production re-registers its webhook on its next restart/deploy (or redeploy from the Render dashboard).
+- Logs: Render dashboard → Logs. Same safe-logging rules (ids only).
+
 ## Runbook: manual E2E test in a real Telegram group (human + mates)
 For Damian + 3 mates ("Jay", "Sean", "Mike"). Uses the sandbox, so no real money moves. ~20 min. Send the mates `TESTING.md` beforehand: it covers their steps (Start the bot, say hi in the group, sandbox login).
 

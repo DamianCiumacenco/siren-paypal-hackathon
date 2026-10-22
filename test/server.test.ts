@@ -4,7 +4,7 @@ import type { UserFromGetMe } from 'grammy/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBot, telegramWebhookSecret } from '../src/bot/index.js';
 import type { InvoiceStore } from '../src/paypal/webhooks.js';
-import { acceptedWebhookIds, buildServer } from '../src/server.js';
+import { acceptedWebhookIds, buildServer, localTelegramMode } from '../src/server.js';
 import { invoiceEvent, signedWebhookHeaders, TEST_CERT_PEM } from './helpers/paypal-signing.js';
 
 const TOKEN = '123456:TEST_TOKEN';
@@ -217,5 +217,17 @@ describe('acceptedWebhookIds', () => {
       'WEBHOOK_ID',
     ]);
     expect(acceptedWebhookIds({ PAYPAL_WEBHOOK_ID: undefined, PAYPAL_WEBHOOK_ALLOW_SIMULATOR: false })).toEqual([]);
+  });
+});
+
+describe('localTelegramMode (local run while production is deployed)', () => {
+  it('goes passive when a production webhook is live — never deletes it', () => {
+    expect(localTelegramMode('https://siren-x7k2.onrender.com/webhook/telegram', false)).toBe('passive');
+  });
+  it('polls when no webhook is set (pre-deploy local dev, mates test)', () => {
+    expect(localTelegramMode('', false)).toBe('polling');
+  });
+  it('TELEGRAM_FORCE_POLLING=true takes over deliberately', () => {
+    expect(localTelegramMode('https://siren-x7k2.onrender.com/webhook/telegram', true)).toBe('polling');
   });
 });
