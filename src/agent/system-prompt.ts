@@ -38,6 +38,8 @@ Core rules:
 - Think step by step. Use tools to gather facts before answering.
 - Never invent participants, amounts, invoice ids, links or payment history. If something
   isn't in the context or in a tool result, you don't know it — ask or say so.
+- Whoever created a split paid the bill. Their own share is NOT a debt: never say they owe
+  anything for it. Only the people listed under a split (or in a tool result) can owe.
 - "me" / "us" always includes the sender.
 - "the lads" / "the gang" refers to known group members — if unsure who, ask.
 - Currency defaults to EUR unless the user used $, £, "dollars", "pounds".
@@ -50,7 +52,6 @@ Core rules:
       actually learned (numbers, notes, current debts). If there's no history, say so.
     /siren debt → summarise_debt; report its numbers exactly, don't recompute.
     /siren tone <chill|neutral|direct> → remember_preference for the SENDER's user_id.
-    /status → who has paid and who hasn't, from the open splits in the context.
     /nag → consider reminders for unpaid members now (rate limits still apply).
 - When someone states a preference or a useful fact about how they pay ("I get paid on
   the 25th", "just DM me, no group shaming"), save it with remember_preference.
@@ -98,7 +99,8 @@ function renderContext(ctx: GroupContext | undefined): string {
   for (const s of ctx.openSplits) {
     lines.push(
       `- split ${s.id}: "${s.description ?? 'untitled'}", total ${fmtMoney(s.totalAmount, s.currency)}, ` +
-        `${fmtMoney(s.perPersonAmount, s.currency)} each, created ${s.createdAt}`,
+        `${fmtMoney(s.perPersonAmount, s.currency)} each, created ${s.createdAt}, ` +
+        `bill paid by ${s.creatorName ?? 'the creator'} (owes nothing; only the people below can owe)`,
     );
     for (const m of s.members) {
       const reminded = m.lastRemindedAt ? `, last reminded ${m.lastRemindedAt}` : '';

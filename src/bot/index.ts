@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import { Bot, type BotConfig } from 'grammy';
 import type { ChatRegistry } from '../db/chats.js';
+import type { HistorySplit } from '../db/history.js';
 import type { ReasoningLogEntry } from '../db/reasoning_log.js';
 import { logError, type Logger } from '../lib/safe-error.js';
 import { registerBasicCommands } from './commands.js';
 import type { SirenContext } from './context.js';
 import { createSplitCallbackHandler, SPLIT_CALLBACK, type CallbackDeps } from './handlers/callback.js';
 import { agentPrompt, createAgentMessageHandler, type MessageHandlerDeps } from './handlers/message.js';
+import { formatStatus, isStatusCommand } from './handlers/status.js';
 import { formatWhy, isWhyCommand } from './handlers/why.js';
 import { registerChat } from './middleware.js';
 
@@ -14,6 +16,8 @@ export interface BotDeps extends MessageHandlerDeps, CallbackDeps {
   registry: ChatRegistry;
   /** Latest reasoning_log row for a group (`/siren why`, no LLM). */
   lastReasoning: (groupId: number) => Promise<ReasoningLogEntry | null>;
+  /** This group's recent splits, newest first (`/status`, no LLM). */
+  groupSplits: (groupId: number) => Promise<HistorySplit[]>;
   log: Logger;
 }
 
@@ -53,6 +57,11 @@ export function createBot(token: string, options?: BotConfig<SirenContext>, deps
       if (isWhyCommand(ctx)) {
         const groupId = ctx.siren?.groupId;
         await ctx.reply(groupId === undefined ? 'Ask me that in the group chat.' : formatWhy(await deps.lastReasoning(groupId)));
+        return;
+      }
+      if (isStatusCommand(ctx)) {
+        const groupId = ctx.siren?.groupId;
+        await ctx.reply(groupId === undefined ? 'Ask me that in the group chat.' : formatStatus(await deps.groupSplits(groupId)));
         return;
       }
       const prompt = agentPrompt(ctx);

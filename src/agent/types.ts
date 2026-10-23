@@ -38,6 +38,8 @@ export interface GroupContext {
     totalAmount: number | null;
     perPersonAmount: number | null;
     createdAt: string;
+    /** Who created the split = who paid the bill. Their own share is never a debt. */
+    creatorName: string | null;
     members: {
       splitMemberId: string;
       name: string;

@@ -20,6 +20,7 @@ const split = (over: Partial<HistorySplit> & Pick<HistorySplit, 'members'>): His
   description: 'football',
   status: 'open',
   currency: 'EUR',
+  totalAmount: null,
   perPersonAmount: 6,
   createdAt: '2026-10-19T10:00:00Z',
   creator: { userId: 1, name: 'Damian' },

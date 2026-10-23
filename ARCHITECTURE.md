@@ -50,7 +50,7 @@ siren/
 │   │   └── reasoning-log.ts         # persist chain-of-thought
 │   ├── bot/
 │   │   ├── index.ts                 # grammy setup, webhook mount
-│   │   ├── commands.ts              # /start /split /status /nag /help /siren ...
+│   │   ├── commands.ts              # /start /split /status /nag /help /siren ...  (/status + /siren why: handlers/status.ts, handlers/why.ts — no LLM)
 │   │   ├── middleware.ts            # group auto-register, user resolve
 │   │   └── handlers/
 │   │       ├── message.ts           # free-text → agent
@@ -394,6 +394,13 @@ Command → latest reasoning_log row for the group → formatWhy(): Step N: thou
 Redacted for the group: links, invoice numbers, uuids/ids removed; DM and note text never shown.
 ```
 
+### Flow F — `/status` (milestone 13: no LLM)
+```
+Command → this group's splits (history store) → formatStatus(): open splits, or "No open splits" + the most recent one
+Per member row: paid ✅ / owes €X / cancelled. The creator gets one line: "paid the bill (own share, nothing owed)".
+```
+**Why it's code, not the agent:** in the live e2e on Render the agent read "€2 total, €1 each" and told the group the creator "still owes €1". Same bug class as the invented "€5" in milestone 7. Rule everywhere: **the creator paid the bill; their own share is never a debt — only `split_members` rows can owe.** Enforced in `/status` (code), `summarise_debt` (skips creator → creator), the agent's `<context>` ("bill paid by X (owes nothing …)"), `fetch_group_history` (`bill_payer_owes: 'nothing'`) and a system-prompt rule. Free-text "who still owes?" still goes to the agent; `agent:live --scenario memory` asserts it never says the creator owes.
+
 ---
 
 ## PayPal webhooks (we own this, not toolkit)
@@ -447,7 +454,12 @@ Build-order rule: **tests pass at each milestone** before moving on.
 - User turn = `<context>` block (trigger, sender, country, time, group snapshot) + the message. Everything per-call lives here, after the prefix.
 - Telemetry: every step records `tokens.cached` (`usage.inputTokenDetails.cacheReadTokens`; undefined = provider didn't report it). Shown per step in `/siren why` ("3.1k in, 2.0k cached"), logged per run as `agent run finished {inputTokens, cachedTokens, cacheHitPct, models}`, and measured by `npm run agent:live -- --scenario cache`.
 
-**Measured (2026-10-22, free tiers):** 0 cached tokens on all three providers. Groq `gpt-oss-120b` returns no `prompt_tokens_details` at all (and requests are served from several regions: fra, lhr); Gemini `gemini-3.5-flash` and NVIDIA `nemotron-3-ultra` report `cached 0` even for an identical 5k-token prefix. So the expected 50–70% saving isn't available on these tiers. The layout is in place and the telemetry will show hits the day a provider caches (re-measure on the Groq Dev tier at milestone 13).
+**Measured (2026-10-22, free tiers):** 0 cached tokens on all three providers. Groq `gpt-oss-120b` returns no `prompt_tokens_details` at all (and requests are served from several regions: fra, lhr); Gemini `gemini-3.5-flash` and NVIDIA `nemotron-3-ultra` report `cached 0` even for an identical 5k-token prefix. So the expected 50–70% saving isn't available on these tiers. The layout is in place and the telemetry will show hits the day a provider caches.
+
+**Re-measured at milestone 13 (2026-10-23, still free tiers; Groq Dev tier skipped by decision):**
+- Production (Render, Frankfurt), `npm run cache:report -- 48`: 4 agent runs, 5 Groq steps, 13.8k input tokens, cached **not reported** on every step. Real traffic is sparse (minutes to hours between calls), so a provider prefix cache, which lives minutes, rarely gets a second hit.
+- Local `agent:live --scenario memory`: Groq `gpt-oss-120b` reported its **first hit: 2,304 of 2,997 input tokens cached (77%)** on a call made right after another one with the same prefix. So Groq's free tier does cache, but only for back-to-back calls and without reporting it otherwise. Over a whole run: 10% (memory scenario), **35% for the full `agent:live`** (20 steps, 22.3k of 63.6k input tokens cached) and 42% for the scheduler scenario, where passes hit several splits in a row.
+- Conclusion: the prefix layout works when calls come in quick succession (a busy group, a scheduler pass over several splits). It's not a cost lever at hackathon traffic, and no change is planned.
 
 ## Known risks + mitigations (updated)
 

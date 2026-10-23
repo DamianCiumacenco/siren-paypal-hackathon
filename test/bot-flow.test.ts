@@ -78,6 +78,7 @@ function setup(overrides: Partial<BotDeps> = {}) {
     splits,
     sendSplit: vi.fn(async () => ({ dmed: ['Jay'], linkInGroup: [], failed: [] })),
     lastReasoning: vi.fn(async () => null),
+    groupSplits: vi.fn(async () => []),
     log,
     background: (p) => void pending.push(p),
     ...overrides,
@@ -99,7 +100,6 @@ describe('which messages reach the agent', () => {
   it.each([
     ['/split €60 football with Jay', '/split €60 football with Jay'],
     ['/split@siren_test_bot €10 pizza', '/split €10 pizza'],
-    ['/status', '/status'],
     ['/nag', '/nag'],
     ['/siren about Jay', '/siren about Jay'],
     ['/siren why', '/siren why'],
@@ -108,7 +108,7 @@ describe('which messages reach the agent', () => {
     expect(agentPrompt(ctxFor(textUpdate(text)))).toBe(expected);
   });
 
-  it.each(['lads are we on for Thursday?', '/split@other_bot €5', '/help', '/start'])('%s → ignored', (text) => {
+  it.each(['lads are we on for Thursday?', '/split@other_bot €5', '/help', '/start', '/status'])('%s → ignored', (text) => {
     expect(agentPrompt(ctxFor(textUpdate(text)))).toBeUndefined();
   });
 
@@ -182,7 +182,7 @@ describe('message → runAgent → reply + confirmation card', () => {
 
   it('no card when the agent did not propose a split', async () => {
     const { send, sent } = setup({ runAgent: vi.fn(async () => ({ response: 'Jay still owes €6.', thoughts: [] })) });
-    await send(textUpdate('/status'));
+    await send(textUpdate('/nag'));
     expect(sent()).toHaveLength(1);
     expect(sent()[0]!.reply_markup).toBeUndefined();
   });
@@ -200,11 +200,27 @@ describe('message → runAgent → reply + confirmation card', () => {
     let release!: () => void;
     const runAgent = vi.fn(() => new Promise<AgentOutput>((r) => (release = () => r({ response: 'ok', thoughts: [] }))));
     const { send, sent, deps } = setup({ runAgent, background: () => {} });
-    await send(textUpdate('/status'));
+    await send(textUpdate('/siren debt'));
     await send(textUpdate('/nag'));
     expect(deps.runAgent).toHaveBeenCalledTimes(1);
     expect(sent().at(-1)!.text).toMatch(/Still working/);
     release();
+  });
+
+  it('/status is answered from the database, no LLM', async () => {
+    const { deps, send, sent } = setup({
+      groupSplits: vi.fn(async () => [
+      {
+        id: 's1', description: 'pizza', status: 'open' as const, currency: 'EUR', totalAmount: 24, perPersonAmount: 12,
+        createdAt: '2026-10-23T10:00:00Z', creator: { userId: 1, name: 'Damian' },
+        members: [{ name: 'Jay', userId: 2, status: 'sent', paidAt: null, remindersSent: 0 }],
+      },
+      ]),
+    });
+    await send(textUpdate('/status'));
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(deps.groupSplits).toHaveBeenCalledWith(7);
+    expect(sent()[0]!.text).toContain('Jay — owes €12.00');
   });
 
   it('DMs explain that splits happen in groups', async () => {

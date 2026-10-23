@@ -24,7 +24,10 @@ export function createFetchGroupHistoryTool(deps: { context: AgentContext; store
           status: s.status,
           each: `${s.perPersonAmount.toFixed(2)} ${s.currency}`,
           created: s.createdAt.slice(0, 10),
-          paid_by: s.creator.name,
+          // The creator paid the bill; their own share is never owed (the model once read the
+          // "€X each" maths as a debt for them).
+          bill_paid_by: s.creator.name,
+          bill_payer_owes: 'nothing',
           members: s.members
             .filter((m) => user_id === undefined || m.userId === user_id)
             .map((m) => ({

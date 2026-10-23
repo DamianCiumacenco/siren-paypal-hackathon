@@ -8,6 +8,7 @@ interface SplitRow {
   total_amount: number | null;
   per_person_amount: number | null;
   created_at: string;
+  creator: { first_name: string | null } | null;
   split_members: {
     id: string;
     display_name: string;
@@ -36,7 +37,7 @@ export async function loadGroupContext(db: SupabaseClient, groupId: number): Pro
     db
       .from('splits')
       .select(
-        'id, description, currency, total_amount, per_person_amount, created_at, ' +
+        'id, description, currency, total_amount, per_person_amount, created_at, creator:users!creator_user_id(first_name), ' +
           'split_members(id, display_name, user_id, status, paypal_invoice_id, payment_link, reminders_sent, last_reminded_at)',
       )
       .eq('group_id', groupId)
@@ -79,6 +80,7 @@ export async function loadGroupContext(db: SupabaseClient, groupId: number): Pro
       totalAmount: s.total_amount === null ? null : Number(s.total_amount),
       perPersonAmount: s.per_person_amount === null ? null : Number(s.per_person_amount),
       createdAt: s.created_at,
+      creatorName: s.creator?.first_name ?? null,
       members: s.split_members.map((m) => ({
         splitMemberId: m.id,
         name: m.display_name,

@@ -23,7 +23,8 @@ export interface MessageHandlerDeps {
 }
 
 /** Commands that go to the agent. /start and /help are answered directly. */
-export const AGENT_COMMANDS = ['split', 'status', 'nag', 'siren'] as const;
+// /status and /siren why are answered from the database in bot/index.ts (no LLM).
+export const AGENT_COMMANDS = ['split', 'nag', 'siren'] as const;
 
 /**
  * In groups the bot sees every message (privacy mode off), but only these reach the

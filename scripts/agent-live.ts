@@ -390,6 +390,16 @@ try {
       'read debt result',
     ).debts.find((d) => d.from === 'Jay');
     check('debt: reply quotes the tool\'s figure for Jay', expected !== undefined && debt.response.includes(expected.amount.split(' ')[0]!));
+    await new Promise((r) => setTimeout(r, 25_000));
+
+    // Live e2e (milestone 13) bug: asked this, the agent read "€24 total, €12 each" and said
+    // the creator still owed their own share. /status is code now; free text still goes here.
+    console.log('=== memory: "who still owes?" (Damian created cinema, so he owes nothing)');
+    const owes = await agent({ trigger: 'user_message', userMessage: 'who still owes?', context: { groupId, chatId: FAKE_CHAT_ID, sender } });
+    memoryRuns++;
+    console.log(`  reply:\n${owes.response.split('\n').map((l) => `  | ${l}`).join('\n')}`);
+    check('owes: never claims the creator (Damian) owes money', !/Damian\b[^\n]*\bowes?\b(?! nothing)/i.test(owes.response));
+    check('owes: names Jay as owing', /Jay/.test(owes.response));
   }
 
   // --- scenario: tones (success criterion 7) + /siren why (criterion 5) ------------
@@ -547,6 +557,8 @@ try {
     );
     await db.from('split_members').insert({ split_id: later.id, user_id: jayId, display_name: 'Jay', status: 'sent' });
     // Group B: Mike owes there. A's run must never touch him; B's run must never touch Jay/Sean.
+    // Someone else paid B's bill: a creator never owes their own share (the agent is told so),
+    // so a split created by Mike that invoices Mike would (rightly) be ignored.
     groupB = must<{ id: number }>(await db.from('groups').insert({ telegram_chat_id: FAKE_CHAT_ID - 1, chat_title: 'Siren live test B' }).select('id').single(), 'insert group B').id;
     const MIKE_TG = 999_400_000 + rand();
     const mikeId = must<{ id: number }>(await db.from('users').insert({ telegram_user_id: MIKE_TG, first_name: 'Mike' }).select('id').single(), 'insert Mike').id;
@@ -554,7 +566,7 @@ try {
     await db.from('user_memory').insert({ user_id: mikeId, group_id: groupB, reliability_score: 0.6, preferred_tone: 'neutral' });
     const mikeInv = await invoiceFor('Mike');
     const bSplit = must<{ id: string }>(
-      await db.from('splits').insert({ group_id: groupB, creator_user_id: mikeId, description: 'sched bowling', total_amount: 20, per_person_amount: 10, currency: 'EUR', status: 'open', created_at: new Date(Date.now() - 80 * 3_600_000).toISOString() }).select('id').single(),
+      await db.from('splits').insert({ group_id: groupB, creator_user_id: damianId, description: 'sched bowling', total_amount: 20, per_person_amount: 10, currency: 'EUR', status: 'open', created_at: new Date(Date.now() - 80 * 3_600_000).toISOString() }).select('id').single(),
       'insert B split',
     );
     await db.from('split_members').insert({ split_id: bSplit.id, user_id: mikeId, display_name: 'Mike', status: 'sent', paypal_invoice_id: mikeInv.inv, payment_link: mikeInv.link });
@@ -611,7 +623,7 @@ try {
     const sender = { telegramUserId: DAMIAN_TG, firstName: 'Damian', userId: damianId };
     for (const slot of slots) {
       const single = new FailoverModel([slot], log);
-      for (const q of ['/siren debt', '/status']) {
+      for (const q of ['/siren debt', 'who still owes?']) {
         const before = Date.now();
         const out = await runAgent(
           { trigger: 'user_message', userMessage: q, context: { groupId, chatId: FAKE_CHAT_ID, sender } },

@@ -27,6 +27,7 @@ const groupContext: GroupContext = {
       totalAmount: 60,
       perPersonAmount: 6,
       createdAt: '2026-10-19T10:00:00Z',
+      creatorName: 'Damian',
       members: [
         {
           splitMemberId: MEMBER_ID,

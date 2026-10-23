@@ -34,14 +34,35 @@ check(
   info.last_error_message ? `last error: ${info.last_error_message}` : `pending updates: ${info.pending_update_count}`,
 );
 
-// 3. Webhook endpoints refuse unauthenticated requests
-const tg = await fetch(`${base}/webhook/telegram`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"update_id":1}' });
-check('Telegram webhook rejects requests without the secret header', tg.status === 401, `HTTP ${tg.status}`);
-const pp = await fetch(`${base}/webhook/paypal`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"event_type":"INVOICING.INVOICE.PAID"}' });
+// 3. Webhook endpoints refuse unauthenticated requests. A local network error is reported
+//    as a failed check, not a crash.
+const post = async (path: string, body: string): Promise<{ status: number; error?: string }> => {
+  try {
+    const r = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+      signal: AbortSignal.timeout(60_000),
+    });
+    return { status: r.status };
+  } catch (e) {
+    const cause = (e as Error & { cause?: Error }).cause?.message;
+    return { status: 0, error: `${(e as Error).message}${cause ? ` (${cause})` : ''}` };
+  }
+};
+const describe = (r: { status: number; error?: string }) => r.error ?? `HTTP ${r.status}`;
+
+const tg = await post('/webhook/telegram', '{"update_id":1}');
+check(
+  'Telegram webhook rejects requests without the secret header',
+  tg.status === 401,
+  tg.status === 404 ? 'HTTP 404 — route only exists in webhook mode (is PUBLIC_URL set on Render?)' : describe(tg),
+);
+const pp = await post('/webhook/paypal', '{"event_type":"INVOICING.INVOICE.PAID"}');
 check(
   'PayPal webhook rejects unsigned requests (and is configured)',
   pp.status === 400,
-  `HTTP ${pp.status}${pp.status === 503 ? ' — PAYPAL_WEBHOOK_ID not set on Render yet' : ''}`,
+  pp.status === 503 ? 'HTTP 503 — PAYPAL_WEBHOOK_ID not set on Render yet' : describe(pp),
 );
 
 console.log(failed === 0 ? '\nLIVE CHECKS PASSED' : `\n${failed} LIVE CHECK(S) FAILED`);

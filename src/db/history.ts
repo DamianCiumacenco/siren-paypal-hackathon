@@ -6,6 +6,7 @@ export interface HistorySplit {
   description: string;
   status: 'open' | 'settled' | 'cancelled';
   currency: string;
+  totalAmount: number | null;
   perPersonAmount: number;
   createdAt: string;
   creator: { userId: number | null; name: string };
@@ -30,6 +31,7 @@ interface Row {
   description: string | null;
   status: HistorySplit['status'];
   currency: string;
+  total_amount: unknown;
   per_person_amount: unknown;
   created_at: string;
   creator_user_id: number | null;
@@ -51,7 +53,7 @@ export function createHistoryStore(db: SupabaseClient): HistoryStore {
       let q = db
         .from('splits')
         .select(
-          'id, description, status, currency, per_person_amount, created_at, creator_user_id, ' +
+          'id, description, status, currency, total_amount, per_person_amount, created_at, creator_user_id, ' +
             'creator:users!creator_user_id(first_name), ' +
             'split_members(display_name, user_id, status, paid_at, reminders_sent)' +
             (userId !== undefined ? ', member_filter:split_members!inner(user_id)' : ''),
@@ -69,6 +71,7 @@ export function createHistoryStore(db: SupabaseClient): HistoryStore {
         description: s.description ?? 'split',
         status: s.status,
         currency: s.currency,
+        totalAmount: s.total_amount === null ? null : Number(s.total_amount),
         perPersonAmount: Number(s.per_person_amount),
         createdAt: s.created_at,
         creator: { userId: s.creator_user_id === null ? null : Number(s.creator_user_id), name: s.creator?.first_name ?? 'unknown' },

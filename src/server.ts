@@ -6,6 +6,7 @@ import { loadConfig, type Config } from './config.js';
 import { getDb } from './db/client.js';
 import { runAgent } from './agent/run.js';
 import { createChatRegistry } from './db/chats.js';
+import { createHistoryStore } from './db/history.js';
 import { createMemoryStore } from './db/memory.js';
 import { createPaymentStore } from './db/payments.js';
 import { createSchedulerStore } from './db/scheduler.js';
@@ -152,11 +153,13 @@ async function main(): Promise<void> {
   setLlmLogger(log);
   const lock = new ChatLock(); // shared by user messages and the scheduler
   const splits = createSplitStore(db);
+  const history = createHistoryStore(db);
   const paypalTools = getPayPalTools(config);
   const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {
     registry: createChatRegistry(db),
     lock,
     lastReasoning: (groupId) => lastReasoningLog(db, groupId),
+    groupSplits: (groupId) => history.splits(groupId, { limit: 10 }),
     runAgent: (input) => runAgent(input),
     splits,
     sendSplit: (split) =>
