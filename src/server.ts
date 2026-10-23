@@ -25,6 +25,8 @@ import { SIMULATOR_WEBHOOK_ID, type InvoiceStore } from './paypal/webhooks.js';
 import { healthRoutes } from './routes/health.js';
 import { paypalRoutes, type PayPalRouteOptions } from './routes/paypal.js';
 import { telegramRoutes } from './routes/telegram.js';
+import { e2eRoutes, type E2ERouteOptions } from './routes/e2e.js';
+import { TelegramSink } from './e2e/sink.js';
 
 export interface ServerDeps {
   /**
@@ -33,6 +35,8 @@ export interface ServerDeps {
    */
   telegram?: { bot: Bot<SirenContext>; secretToken: string };
   paypal: PayPalRouteOptions;
+  /** Only when E2E_SECRET is set (milestone 14 e2e suite). */
+  e2e?: E2ERouteOptions;
 }
 
 /** Webhook IDs whose signatures /webhook/paypal accepts. */
@@ -134,6 +138,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(healthRoutes);
   if (deps.telegram) await app.register(telegramRoutes, deps.telegram);
   await app.register(paypalRoutes, deps.paypal);
+  if (deps.e2e) await app.register(e2eRoutes, deps.e2e);
   return app;
 }
 
@@ -172,6 +177,24 @@ async function main(): Promise<void> {
     log,
   });
   const telegramSecret = telegramWebhookSecret(config.TELEGRAM_BOT_TOKEN);
+  // E2E suite only: capture Telegram calls to chats the suite registers (src/e2e/sink.ts).
+  const sink = config.E2E_SECRET ? new TelegramSink() : undefined;
+  if (sink) bot.api.config.use(sink.transformer());
+
+  // Autonomous nag pass (Flow C). Used by the cron below and, scoped to one test group,
+  // by POST /e2e/scheduler-pass.
+  const schedulerStore = createSchedulerStore(db);
+  const memory = createMemoryStore(db);
+  const scheduledPass = (groupIds?: number[]) =>
+    runScheduledPass({
+      store: schedulerStore,
+      memory,
+      runAgent: (input) => runAgent(input),
+      postToGroup: async (chatId, text) => void (await bot.api.sendMessage(chatId, text)),
+      lock,
+      log,
+      groupIds,
+    });
 
   const store: InvoiceStore = createInvoiceStore(db);
   const webhookIds = acceptedWebhookIds(config);
@@ -188,7 +211,19 @@ async function main(): Promise<void> {
           postToGroup: async (chatId, text) => void (await bot.api.sendMessage(chatId, text)),
         }),
     },
+    e2e:
+      sink && config.E2E_SECRET
+        ? {
+            secret: config.E2E_SECRET,
+            sink,
+            schedulerPass: async (telegramChatId) => {
+              const { data } = await db.from('groups').select('id').eq('telegram_chat_id', telegramChatId).maybeSingle();
+              return data ? scheduledPass([Number(data.id)]) : null;
+            },
+          }
+        : undefined,
   });
+  if (sink) app.log.warn('E2E routes enabled (E2E_SECRET set): /e2e/* + Telegram sink for registered test chats');
   if (config.PAYPAL_WEBHOOK_ALLOW_SIMULATOR) app.log.warn('Accepting PayPal Webhook Simulator events (testing only)');
   await app.listen({ port: config.PORT, host: '0.0.0.0' });
 
@@ -206,23 +241,7 @@ async function main(): Promise<void> {
 
   // Autonomous nag flow (Flow C): the agent checks open splits on NAG_CRON_INTERVAL.
   // Only on the instance that owns Telegram (see localTelegramMode).
-  const schedulerStore = createSchedulerStore(db);
-  const memory = createMemoryStore(db);
-  const scheduler = passive
-    ? undefined
-    : startScheduler(
-    config.NAG_CRON_INTERVAL,
-    () =>
-      runScheduledPass({
-        store: schedulerStore,
-        memory,
-        runAgent: (input) => runAgent(input),
-        postToGroup: async (chatId, text) => void (await bot.api.sendMessage(chatId, text)),
-        lock,
-        log,
-      }),
-    log,
-  );
+  const scheduler = passive ? undefined : startScheduler(config.NAG_CRON_INTERVAL, () => scheduledPass(), log);
 
   const shutdown = async () => {
     await scheduler?.stop();

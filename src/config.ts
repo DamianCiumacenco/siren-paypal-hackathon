@@ -60,6 +60,9 @@ const envSchema = z.object({
     .enum(['true', 'false', ''])
     .optional()
     .transform((v) => v === 'true'),
+  // E2E suite (milestone 14). Set → /e2e/* routes exist and Telegram calls to chats the
+  // suite registers are captured instead of sent (src/e2e/sink.ts). Unset → none of it exists.
+  E2E_SECRET: optional.pipe(z.string().min(32, 'must be at least 32 characters').optional()),
 });
 
 export type Config = z.infer<typeof envSchema>;
