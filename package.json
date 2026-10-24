@@ -19,6 +19,7 @@
     "test:startup": "tsx scripts/startup-smoke.ts",
     "agent:live": "tsx scripts/agent-live.ts",
     "test:pii": "vitest run -t PII",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "db:reset": "tsx scripts/db-reset.ts",
     "verify:live": "tsx scripts/verify-live.ts",
     "cache:report": "tsx scripts/cache-report.ts"

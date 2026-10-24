@@ -461,6 +461,14 @@ Build-order rule: **tests pass at each milestone** before moving on.
 - Local `agent:live --scenario memory`: Groq `gpt-oss-120b` reported its **first hit: 2,304 of 2,997 input tokens cached (77%)** on a call made right after another one with the same prefix. So Groq's free tier does cache, but only for back-to-back calls and without reporting it otherwise. Over a whole run: 10% (memory scenario), **35% for the full `agent:live`** (20 steps, 22.3k of 63.6k input tokens cached) and 42% for the scheduler scenario, where passes hit several splits in a row.
 - Conclusion: the prefix layout works when calls come in quick succession (a busy group, a scheduler pass over several splits). It's not a cost lever at hackathon traffic, and no change is planned.
 
+## Milestone 14 — live e2e suite (`npm run test:e2e`)
+
+One file per SCOPE success criterion, run against the deployed server:
+- **Telegram is the only mock:** the suite posts synthetic updates to the real `/webhook/telegram` (real secret header). When `E2E_SECRET` is set, production's `TelegramSink` (a grammy API transformer) captures Bot API calls to chats the suite registered (30-min TTL) and serves them on `GET /e2e/outbox`. Every other chat goes to Telegram unchanged. `POST /e2e/scheduler-pass` runs one pass limited to a registered test group (the cron is 6h).
+- **Everything else is real:** sandbox invoices via the toolkit (addressed to the SETUP.md sandbox accounts), payment via `record_payment_for_invoice` (PayPal sends a real signed `INVOICING.INVOICE.PAID`, about 20s), the LLM failover chain and Supabase.
+- **Found on the first live runs:** the agent's `telegram_dm` used its own grammy `Api`, separate from the bot's. Now one client (`sendDm` comes from `bot.api`). Pay-link DMs now show "€6.00" like the rest (`src/lib/money.ts`). Criterion 7 proved tones are *learned*: the pass recomputes memory from settled history and `pickTone` gives chill vs direct, so hand-set scores get overwritten.
+- **Assertions beyond the criteria:** the 24h reminder cap (Sean reminded 2h ago isn't reminded again; a second pass makes no LLM call) and group isolation (A's pass never DMs B's members; each run is logged under its own group).
+
 ## Known risks + mitigations (updated)
 
 | Risk | Mitigation |
