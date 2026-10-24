@@ -1,4 +1,3 @@
-import { Api } from 'grammy';
 import type { ToolSet } from 'ai';
 import type { Config } from '../../config.js';
 import { getDb } from '../../db/client.js';
@@ -19,7 +18,8 @@ import { createTelegramDmTool, type SendDm } from './telegram_dm.js';
 
 export interface ToolDeps {
   config: Config;
-  sendDm?: SendDm;
+  /** Always the bot's own api (server.ts), so every Telegram call goes through one client. */
+  sendDm: SendDm;
 }
 
 /**
@@ -31,12 +31,7 @@ const AGENT_PAYPAL_TOOLS = ['get_invoice', 'send_invoice_reminder', 'cancel_sent
 
 /** Full tool set for one agent run = scoped PayPal toolkit tools + Siren's custom tools. */
 export function getAllTools(context: AgentContext, deps: ToolDeps): ToolSet {
-  const api = new Api(deps.config.TELEGRAM_BOT_TOKEN);
-  const sendDm: SendDm =
-    deps.sendDm ??
-    (async (telegramUserId, text) => {
-      await api.sendMessage(telegramUserId, text);
-    });
+  const sendDm = deps.sendDm;
 
   const db = getDb();
   const store = createDmStore(db);

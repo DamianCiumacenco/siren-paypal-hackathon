@@ -7,6 +7,7 @@ import { getModel } from '../llm/providers.js';
 import { summariseSteps, type ReasoningRecord, type Thought } from './reasoning-log.js';
 import { buildUserTurn, STABLE_SYSTEM_PROMPT } from './system-prompt.js';
 import { getAllTools } from './tools/index.js';
+import type { SendDm } from './tools/telegram_dm.js';
 import type { AgentInput, GroupContext } from './types.js';
 
 /** Hard cap on agent steps (CLAUDE.md). Each step = one LLM call + its tool calls. */
@@ -31,12 +32,13 @@ export interface AgentDeps {
   persist: (record: ReasoningRecord) => Promise<void>;
 }
 
-async function defaultDeps(input: AgentInput): Promise<AgentDeps> {
+async function defaultDeps(input: AgentInput, sendDm: SendDm | undefined): Promise<AgentDeps> {
+  if (!sendDm) throw new Error('runAgent needs sendDm (the bot\'s api) unless tools are overridden');
   const config = loadConfig();
   const db = getDb();
   return {
     model: getModel(config),
-    tools: getAllTools(input.context, { config }),
+    tools: getAllTools(input.context, { config, sendDm }),
     groupContext: await loadGroupContext(db, input.context.groupId),
     persist: (record) => insertReasoningLog(db, record),
   };
@@ -54,9 +56,12 @@ export function findSplitProposal(thoughts: Thought[]): { splitId: string } | un
 }
 
 /** Single entry point for the agent: one call = one generateText tool loop. */
-export async function runAgent(input: AgentInput, overrides: Partial<AgentDeps> = {}): Promise<AgentOutput> {
+export async function runAgent(
+  input: AgentInput,
+  { sendDm, ...overrides }: Partial<AgentDeps> & { sendDm?: SendDm } = {},
+): Promise<AgentOutput> {
   const complete = overrides.model && overrides.tools && 'groupContext' in overrides && overrides.persist;
-  const deps: AgentDeps = complete ? (overrides as AgentDeps) : { ...(await defaultDeps(input)), ...overrides };
+  const deps: AgentDeps = complete ? (overrides as AgentDeps) : { ...(await defaultDeps(input, sendDm)), ...overrides };
 
   const result = await generateText({
     model: deps.model,

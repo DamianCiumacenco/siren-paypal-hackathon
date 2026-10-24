@@ -3,6 +3,7 @@ import { GrammyError } from 'grammy';
 import type { SendDm } from '../agent/tools/telegram_dm.js';
 import type { SplitForSending, SplitStore } from '../db/splits.js';
 import { logError, type Logger } from '../lib/safe-error.js';
+import { money } from '../lib/money.js';
 import { executeToolkit } from './toolkit.js';
 
 export interface SplitSendResult {
@@ -68,7 +69,7 @@ export async function sendSplitInvoices(split: SplitForSending, deps: SplitSendD
     try {
       await deps.sendDm(
         m.telegramUserId,
-        `Hi ${m.displayName}, your share of "${split.description}" is ${amount.value} ${amount.currency_code}.\nPay with PayPal here: ${link}`,
+        `Hi ${m.displayName}, your share of "${split.description}" is ${money(split.perPersonAmount, split.currency)}.\nPay with PayPal here: ${link}`,
       );
       await deps.store.setMemberStatus(m.id, 'sent');
       result.dmed.push(m.displayName);

@@ -5,6 +5,7 @@ import { createBot, telegramWebhookSecret } from './bot/index.js';
 import { loadConfig, type Config } from './config.js';
 import { getDb } from './db/client.js';
 import { runAgent } from './agent/run.js';
+import type { AgentInput } from './agent/types.js';
 import { createChatRegistry } from './db/chats.js';
 import { createHistoryStore } from './db/history.js';
 import { createMemoryStore } from './db/memory.js';
@@ -160,12 +161,16 @@ async function main(): Promise<void> {
   const splits = createSplitStore(db);
   const history = createHistoryStore(db);
   const paypalTools = getPayPalTools(config);
+  // The agent's telegram_dm goes through the bot's own api, like every other Telegram call
+  // (so there's one client, and the e2e sink sees agent DMs too).
+  const agent = (input: AgentInput) =>
+    runAgent(input, { sendDm: async (to, text) => void (await bot.api.sendMessage(to, text)) });
   const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {
     registry: createChatRegistry(db),
     lock,
     lastReasoning: (groupId) => lastReasoningLog(db, groupId),
     groupSplits: (groupId) => history.splits(groupId, { limit: 10 }),
-    runAgent: (input) => runAgent(input),
+    runAgent: (input) => agent(input),
     splits,
     sendSplit: (split) =>
       sendSplitInvoices(split, {
@@ -189,7 +194,7 @@ async function main(): Promise<void> {
     runScheduledPass({
       store: schedulerStore,
       memory,
-      runAgent: (input) => runAgent(input),
+      runAgent: (input) => agent(input),
       postToGroup: async (chatId, text) => void (await bot.api.sendMessage(chatId, text)),
       lock,
       log,

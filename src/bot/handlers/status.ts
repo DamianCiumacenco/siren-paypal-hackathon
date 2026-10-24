@@ -1,4 +1,5 @@
 import type { HistorySplit } from '../../db/history.js';
+import { money } from '../../lib/money.js';
 import type { SirenContext } from '../context.js';
 
 /**
@@ -8,14 +9,8 @@ import type { SirenContext } from '../context.js';
  * (the people they invoiced) can owe anything.
  */
 
-const SYMBOL: Record<string, string> = { EUR: '€', GBP: '£', USD: '$' };
 const UNPAID = new Set(['pending', 'sent', 'failed']);
 const MAX_SPLITS = 5;
-
-export function money(amount: number, currency: string): string {
-  const sym = SYMBOL[currency];
-  return sym ? `${sym}${amount.toFixed(2)}` : `${amount.toFixed(2)} ${currency}`;
-}
 
 function formatSplit(s: HistorySplit): string[] {
   const paid = s.members.filter((m) => m.status === 'paid').length;

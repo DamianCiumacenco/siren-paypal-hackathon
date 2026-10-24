@@ -68,6 +68,8 @@ describe('sendSplitInvoices (after ✅)', () => {
 
     expect(s.setMemberInvoice).toHaveBeenCalledWith('m-jay', 'INV2-1', 'https://www.sandbox.paypal.com/invoice/p/#INV2-1');
     expect(sendDm).toHaveBeenCalledWith(1002, expect.stringContaining('https://www.sandbox.paypal.com/invoice/p/#INV2-1'));
+    // Same amount format as reminders and /status (was "6.00 EUR" before milestone 14).
+    expect(sendDm).toHaveBeenCalledWith(1002, expect.stringContaining('is €6.00.'));
     expect(sendDm).toHaveBeenCalledTimes(2);
     expect(r).toEqual({
       dmed: ['Jay', 'Sean'],
