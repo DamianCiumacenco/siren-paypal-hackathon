@@ -23,7 +23,7 @@ import { handleInvoicePaid } from './memory/on-payment.js';
 import { sendSplitInvoices } from './paypal/split_invoices.js';
 import { getPayPalTools } from './paypal/toolkit.js';
 import { SIMULATOR_WEBHOOK_ID, type InvoiceStore } from './paypal/webhooks.js';
-import { healthRoutes } from './routes/health.js';
+import { healthRoutes, type HealthRouteOptions } from './routes/health.js';
 import { paypalRoutes, type PayPalRouteOptions } from './routes/paypal.js';
 import { telegramRoutes } from './routes/telegram.js';
 import { e2eRoutes, type E2ERouteOptions } from './routes/e2e.js';
@@ -36,6 +36,7 @@ export interface ServerDeps {
    */
   telegram?: { bot: Bot<SirenContext>; secretToken: string };
   paypal: PayPalRouteOptions;
+  health?: HealthRouteOptions;
   /** Only when E2E_SECRET is set (milestone 14 e2e suite). */
   e2e?: E2ERouteOptions;
 }
@@ -136,7 +137,7 @@ export async function setupTelegram(opts: {
 /** Build the Fastify app without listening — tests use `app.inject()` against this. */
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
-  await app.register(healthRoutes);
+  await app.register(healthRoutes, deps.health ?? {});
   if (deps.telegram) await app.register(telegramRoutes, deps.telegram);
   await app.register(paypalRoutes, deps.paypal);
   if (deps.e2e) await app.register(e2eRoutes, deps.e2e);
@@ -206,6 +207,12 @@ async function main(): Promise<void> {
   const webhookMode = Boolean(config.PUBLIC_URL);
   app = await buildServer({
     telegram: webhookMode ? { bot, secretToken: telegramSecret } : undefined,
+    health: {
+      dbPing: async () => {
+        const { error } = await db.from('groups').select('id').limit(1);
+        if (error) throw new Error(error.message);
+      },
+    },
     paypal: {
       webhookIds,
       store,

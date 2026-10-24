@@ -7,7 +7,7 @@ import { logError, type Logger } from '../lib/safe-error.js';
 import { registerBasicCommands } from './commands.js';
 import type { SirenContext } from './context.js';
 import { createSplitCallbackHandler, SPLIT_CALLBACK, type CallbackDeps } from './handlers/callback.js';
-import { agentPrompt, createAgentMessageHandler, type MessageHandlerDeps } from './handlers/message.js';
+import { agentPrompt, createAgentMessageHandler, SOMETHING_WENT_WRONG, type MessageHandlerDeps } from './handlers/message.js';
 import { formatStatus, isStatusCommand } from './handlers/status.js';
 import { formatWhy, isWhyCommand } from './handlers/why.js';
 import { registerChat } from './middleware.js';
@@ -27,6 +27,17 @@ const consoleLog: Logger = {
   error: (o, m) => console.error(m, o),
 };
 
+/** A DM, a /command, an @mention or a reply to the bot: someone is waiting for an answer. */
+export function addressedToBot(ctx: SirenContext): boolean {
+  const msg = ctx.message;
+  if (!msg) return false;
+  if (ctx.chat?.type === 'private') return true;
+  const text = msg.text ?? '';
+  if (text.startsWith('/')) return true;
+  if (ctx.me && new RegExp(`@${ctx.me.username}\\b`, 'i').test(text)) return true;
+  return msg.reply_to_message?.from?.id === ctx.me?.id;
+}
+
 /**
  * Build the bot. Without `deps` only /start and /help work (no DB) — used by tests that
  * only check webhook wiring. Registration order matters: the chat-registration
@@ -45,6 +56,13 @@ export function createBot(token: string, options?: BotConfig<SirenContext>, deps
       await next();
     } catch (err) {
       logError(log, err, 'bot update failed', { updateId: ctx.update.update_id, chatId: ctx.chat?.id });
+      // Never fail silently (milestone 13: a DB error left the bot mute while Telegram saw 200s).
+      // Only answer what was aimed at the bot, so an outage doesn't reply to every group message.
+      if (ctx.callbackQuery) {
+        await ctx.answerCallbackQuery({ text: SOMETHING_WENT_WRONG, show_alert: true }).catch(() => {});
+      } else if (addressedToBot(ctx)) {
+        await ctx.reply(SOMETHING_WENT_WRONG).catch(() => {});
+      }
     }
   });
 

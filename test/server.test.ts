@@ -3,6 +3,7 @@ import { APICallError } from 'ai';
 import type { UserFromGetMe } from 'grammy/types';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBot, telegramWebhookSecret } from '../src/bot/index.js';
+import { SOMETHING_WENT_WRONG } from '../src/bot/handlers/message.js';
 import type { InvoiceStore } from '../src/paypal/webhooks.js';
 import { HttpError } from 'grammy';
 import { telegramStatus } from '../src/lib/telegram-status.js';
@@ -172,6 +173,77 @@ describe('polling mode (no PUBLIC_URL)', () => {
 });
 
 describe('Telegram webhook mode: errors never reach Fastify', () => {
+  /** A bot whose registration always fails (DB down), recording what it sends. */
+  async function failingBotServer() {
+    const logs: string[] = [];
+    const sent: { method: string; payload: Record<string, unknown> }[] = [];
+    const capture = (o: object, m?: string) => void logs.push(JSON.stringify({ ...o, msg: m }));
+    const bot = createBot(TOKEN, { botInfo }, {
+      registry: {
+        registerUser: async () => {
+          throw new Error('registerUser failed: connection refused');
+        },
+        registerGroup: async () => 1,
+        registerMembership: async () => {},
+      },
+      runAgent: async () => ({ response: '', thoughts: [] }),
+      splits: {} as never,
+      sendSplit: async () => ({ dmed: [], linkInGroup: [], failed: [] }),
+      lastReasoning: async () => null,
+      groupSplits: async () => [],
+      log: { info: capture, warn: capture, error: capture },
+    });
+    bot.api.config.use(async (_prev, method, payload) => {
+      sent.push({ method, payload: payload as Record<string, unknown> });
+      return { ok: true, result: true } as never;
+    });
+    const app = await buildServer({
+      telegram: { bot, secretToken: SECRET },
+      paypal: { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } },
+    });
+    const post = (update: unknown) =>
+      app.inject({ method: 'POST', url: '/webhook/telegram', headers: { 'x-telegram-bot-api-secret-token': SECRET }, payload: update as object });
+    return { app, sent, logs, post };
+  }
+  const groupUpdate = (text: string, extra: Record<string, unknown> = {}) => ({
+    update_id: 2,
+    message: {
+      message_id: 5,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: -100777, type: 'supergroup', title: 'lads' },
+      from: { id: 42, is_bot: false, first_name: 'Damian' },
+      text,
+      ...extra,
+    },
+  });
+
+  it('never silent: a failed command still gets "something went wrong" (milestone 13: bot went mute on DB errors)', async () => {
+    const { app, sent, post } = await failingBotServer();
+    expect((await post(startUpdate('/status'))).statusCode).toBe(200);
+    expect(sent).toEqual([{ method: 'sendMessage', payload: expect.objectContaining({ chat_id: 42, text: SOMETHING_WENT_WRONG }) }]);
+    sent.length = 0;
+    await post(groupUpdate(`@${botInfo.username} who owes?`));
+    expect(sent.map((c) => c.payload.text)).toEqual([SOMETHING_WENT_WRONG]);
+    await app.close();
+  });
+
+  it('…but ordinary group chatter is not answered during an outage', async () => {
+    const { app, sent, post } = await failingBotServer();
+    expect((await post(groupUpdate('who is driving thursday?'))).statusCode).toBe(200);
+    expect(sent).toEqual([]);
+    await app.close();
+  });
+
+  it('a failed button tap gets an alert instead', async () => {
+    const { app, sent, post } = await failingBotServer();
+    await post({
+      update_id: 3,
+      callback_query: { id: 'cb1', from: { id: 42, is_bot: false, first_name: 'Damian' }, chat_instance: 'x', data: 'split:confirm:00000000-0000-0000-0000-000000000000' },
+    });
+    expect(sent).toEqual([{ method: 'answerCallbackQuery', payload: expect.objectContaining({ callback_query_id: 'cb1', text: SOMETHING_WENT_WRONG, show_alert: true }) }]);
+    await app.close();
+  });
+
   it('a failing update returns 200 (no Telegram re-delivery) and logs no PII', async () => {
     const logs: string[] = [];
     const capture = (o: object, m?: string) => void logs.push(JSON.stringify({ ...o, msg: m }));
@@ -300,6 +372,21 @@ describe('setupTelegram: Telegram problems never crash the server', () => {
     const none = fakeBot({});
     expect(await setupTelegram({ ...base, bot: none.bot, log })).toBe('polling');
     expect(none.started.value).toBe(true);
+  });
+
+  it('GET /health pings the database: ok → db "ok"; failure → 503 so UptimeRobot alerts', async () => {
+    const paypal = { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } };
+    const good = await buildServer({ paypal, health: { dbPing: async () => {} } });
+    const okRes = await good.inject({ method: 'GET', url: '/health' });
+    expect(okRes.statusCode).toBe(200);
+    expect(okRes.json()).toMatchObject({ ok: true, db: 'ok' });
+    await good.close();
+
+    const bad = await buildServer({ paypal, health: { dbPing: async () => { throw new Error('connection refused'); } } });
+    const badRes = await bad.inject({ method: 'GET', url: '/health' });
+    expect(badRes.statusCode).toBe(503);
+    expect(badRes.json()).toMatchObject({ ok: false, db: 'error' });
+    await bad.close();
   });
 
   it('GET /health reports the Telegram state', async () => {

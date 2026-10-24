@@ -49,6 +49,8 @@ export function agentPrompt(ctx: SirenContext): string | undefined {
   return undefined;
 }
 
+export const SOMETHING_WENT_WRONG = 'Sorry, something went wrong on my side. Try again in a minute.';
+
 /** User-facing message for an agent failure (never the raw error). */
 export function failureMessage(err: unknown): string {
   const e = RetryError.isInstance(err) ? err.lastError : err;
@@ -63,7 +65,7 @@ export function failureMessage(err: unknown): string {
     return `I've used up my AI quota for now (free plan daily limit). Try again in about ${when(e.waitMs)}.`;
   }
   if (APICallError.isInstance(e) && e.statusCode === 429) return "I'm over my AI rate limit right now — try again in a minute.";
-  return 'Sorry, something went wrong on my side. Try again in a minute.';
+  return SOMETHING_WENT_WRONG;
 }
 
 /** Card under the agent's reply. Text comes from the tool result (code), not the LLM. */

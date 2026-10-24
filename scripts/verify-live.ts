@@ -20,8 +20,10 @@ const t0 = Date.now();
 const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(90_000) }).catch((e: Error) => e);
 if (health instanceof Error) check('GET /health', false, health.message);
 else {
-  const body = (await health.json().catch(() => ({}))) as { ok?: boolean; uptimeSeconds?: number; telegram?: string };
+  const body = (await health.json().catch(() => ({}))) as { ok?: boolean; uptimeSeconds?: number; telegram?: string; db?: string };
   check('GET /health', health.ok && body.ok === true, `${health.status} in ${Date.now() - t0}ms, uptime ${body.uptimeSeconds}s`);
+  // A broken DB used to leave the bot mute while /health stayed green (milestone 13).
+  check('Database reachable from the deployment', body.db === 'ok', `db: ${body.db ?? '(not reported — deploy predates the DB ping)'}`);
   check('Telegram wired up (webhook mode)', body.telegram === 'webhook', `telegram: ${body.telegram ?? '(not reported)'}`);
 }
 
