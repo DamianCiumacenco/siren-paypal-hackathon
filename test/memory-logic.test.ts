@@ -179,6 +179,48 @@ describe('/siren why (no LLM, redacted for the group)', () => {
     expect(text).toContain('Result: Reminded Jay.');
   });
 
+  it('demo-ready: a one-line tool overview under the header', () => {
+    expect(text.split('\n')[1]).toBe('Tools: telegram_dm ✓ → send_invoice_reminder ✗');
+    expect(formatWhy({ trigger: 'user_message', createdAt: '2026-10-21T14:02:00Z', thoughts: [], finalResponse: 'Hi' })).toContain(
+      'No tools needed',
+    );
+  });
+
+  it('demo-ready: long thoughts cut at a word, readable times, no empty steps, truncation at a line', () => {
+    const long = formatWhy({
+      trigger: 'scheduled_run',
+      createdAt: '2026-10-21T14:02:00Z',
+      thoughts: [
+        { step: 1, reasoning: 'word '.repeat(80), toolCalls: [], toolResults: [], toolErrors: [], tokens: {} },
+        {
+          step: 2,
+          toolCalls: [{ tool: 'telegram_dm', input: { kind: 'reminder' } }],
+          toolResults: [{ tool: 'telegram_dm', output: { ok: false, error: 'rate limited: Sean was reminded at 2026-10-21T12:00:00.000Z' } }],
+          toolErrors: [],
+          tokens: {},
+        },
+        { step: 3, toolCalls: [], toolResults: [], toolErrors: [], tokens: {} },
+      ],
+      finalResponse: 'Nobody to remind yet.',
+    });
+    expect(long).toMatch(/thought: (word )+word…\n/);
+    expect(long).toContain('← ✗ rate limited: Sean was reminded at 21 Oct 12:00 UTC');
+    expect(long).toContain('Step 3\n(wrote the reply)');
+
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      step: i + 1,
+      reasoning: 'x'.repeat(200),
+      toolCalls: [],
+      toolResults: [],
+      toolErrors: [],
+      tokens: {},
+    }));
+    const cut = formatWhy({ trigger: 'scheduled_run', createdAt: '2026-10-21T14:02:00Z', thoughts: many, finalResponse: '' });
+    expect(cut.length).toBeLessThanOrEqual(3500);
+    expect(cut).toMatch(/\n… \(truncated\)$/);
+    expect(cut.split('\n').at(-2)).toMatch(/^(thought: x+…|Step \d+|)$/);
+  });
+
   it('never shows DM wording, pay links, invoice numbers or internal ids', () => {
     for (const secret of ['still waiting', 'https://', 'INV2-', '11111111-', 'user_id 23', 'split_member_id']) {
       expect(text, secret).not.toContain(secret);

@@ -23,7 +23,17 @@ export function redact(text: string): string {
     .replace(/\[?\b(split_member_id|user_id|split_id)\s*[:=]?\s*(\[id\]|[\w-]+)\]?/gi, '[id]');
 }
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+/** Shorten to n chars, cutting at a word boundary when there's one reasonably close. */
+const clip = (s: string, n: number) => {
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n - 1);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > n * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:—-]+$/, '')}…`;
+};
+
+/** "2026-10-21T14:02:00.000Z" in a tool result → "21 Oct 14:02 UTC" (rate-limit messages). */
+const ISO = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z\b/g;
+const readable = (s: string) => s.replace(ISO, (iso) => formatTime(iso));
 
 function scalarPairs(obj: unknown, skip: (k: string) => boolean, max: number): string {
   if (!obj || typeof obj !== 'object') return typeof obj === 'string' ? clip(redact(obj), 80) : '';
@@ -45,10 +55,22 @@ export const TRIGGER_LABEL: Record<string, string> = {
   webhook: 'after a payment',
 };
 
-export function formatWhy(entry: ReasoningLogEntry | null): string {
-  if (!entry) return "I haven't made any decisions in this group yet.";
+/** One-line overview for the top of /siren why: "Tools: get_member_profile ✓ → telegram_dm ✗". */
+function toolOverview(thoughts: Thought[]): string {
+  const calls = thoughts.flatMap((t) =>
+    t.toolCalls.map((c, i) => {
+      const r = t.toolResults[i]?.output as { ok?: unknown } | undefined;
+      const failed = r?.ok === false || (t.toolErrors ?? []).some((e) => e.tool === c.tool);
+      return `${c.tool} ${failed ? '✗' : '✓'}`;
+    }),
+  );
+  return calls.length ? `Tools: ${calls.join(' → ')}` : 'No tools needed: answered from what it already knew.';
+}
+
+/** The step-by-step part (also the dashboard's decision detail). */
+export function formatWhySteps(entry: ReasoningLogEntry): string {
   const thoughts = (Array.isArray(entry.thoughts) ? entry.thoughts : []) as Thought[];
-  const lines = [`My last decision (${TRIGGER_LABEL[entry.trigger ?? ''] ?? entry.trigger ?? 'unknown'}, ${formatTime(entry.createdAt)})`];
+  const lines: string[] = [];
 
   for (const t of thoughts) {
     const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
@@ -57,22 +79,33 @@ export function formatWhy(entry: ReasoningLogEntry | null): string {
       tok.input === undefined ? '' : `${k(tok.input)} in${tok.cached !== undefined ? `, ${k(tok.cached)} cached` : ''}`;
     const meta = [t.model, usage].filter(Boolean).join(' · ');
     lines.push('', `Step ${t.step}${meta ? ` (${meta})` : ''}`);
-    if (t.reasoning) lines.push(`thought: ${clip(redact(t.reasoning.replace(/\s+/g, ' ')), 280)}`);
+    if (t.reasoning) lines.push(`thought: ${clip(redact(t.reasoning.replace(/\s+/g, ' ')), 240)}`);
+    if (!t.reasoning && t.toolCalls.length === 0 && (t.toolErrors ?? []).length === 0) lines.push('(wrote the reply)');
     t.toolCalls.forEach((c, i) => {
       const args = scalarPairs(c.input, (k) => HIDDEN_INPUTS.has(k), 4);
       lines.push(`→ ${c.tool}${args ? ` (${args})` : ''}`);
       const r = t.toolResults[i]?.output as Record<string, unknown> | undefined;
       if (r) {
         const ok = r.ok === false ? '✗' : '✓';
-        const detail = r.ok === false ? clip(redact(String(r.error ?? 'failed')), 120) : scalarPairs(r, (k) => k === 'ok' || ID_KEYS.test(k) || k === 'next_step', 3);
+        const detail = r.ok === false ? clip(readable(redact(String(r.error ?? 'failed'))), 120) : readable(scalarPairs(r, (k) => k === 'ok' || ID_KEYS.test(k) || k === 'next_step', 3));
         lines.push(`← ${ok}${detail ? ` ${detail}` : ''}`);
       }
     });
     for (const e of t.toolErrors ?? []) lines.push(`✗ ${e.tool} failed: ${clip(redact(e.error), 120)}`);
   }
   if (entry.finalResponse) lines.push('', `Result: ${clip(redact(entry.finalResponse.replace(/\s+/g, ' ')), 300)}`);
-  const text = lines.join('\n');
-  return text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS - 20)}\n… (truncated)` : text;
+  return lines.join('\n').trim();
+}
+
+export function formatWhy(entry: ReasoningLogEntry | null): string {
+  if (!entry) return "I haven't made any decisions in this group yet.";
+  const thoughts = (Array.isArray(entry.thoughts) ? entry.thoughts : []) as Thought[];
+  const header = `My last decision (${TRIGGER_LABEL[entry.trigger ?? ''] ?? entry.trigger ?? 'unknown'}, ${formatTime(entry.createdAt)})`;
+  const text = [header, toolOverview(thoughts), '', formatWhySteps(entry)].join('\n').trimEnd();
+  if (text.length <= MAX_CHARS) return text;
+  // Cut at a line boundary so no step is left half-printed.
+  const cut = text.slice(0, MAX_CHARS - 20);
+  return `${cut.slice(0, cut.lastIndexOf('\n'))}\n… (truncated)`;
 }
 
 /** True for "/siren why" (optionally /siren@thisbot why). */

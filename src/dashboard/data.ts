@@ -1,5 +1,5 @@
 import type { Thought } from '../agent/reasoning-log.js';
-import { formatWhy, redact, TRIGGER_LABEL } from '../bot/handlers/why.js';
+import { formatWhySteps, redact, TRIGGER_LABEL } from '../bot/handlers/why.js';
 import type { DashboardMemberRow } from '../db/dashboard.js';
 import type { HistorySplit } from '../db/history.js';
 import type { ReasoningLogEntry } from '../db/reasoning_log.js';
@@ -110,8 +110,8 @@ export async function buildDashboardData(groupId: number, src: DashboardSources,
         models: [...new Set(thoughts.map((t) => t.model).filter(Boolean))].join(', '),
         tools: thoughts.flatMap((t) => t.toolCalls.map((c) => c.tool)).join(' → '),
         summary: summary.length > SUMMARY_CHARS ? `${summary.slice(0, SUMMARY_CHARS - 1)}…` : summary,
-        // Same redacted step view as /siren why, minus its "My last decision (…)" header line.
-        detail: formatWhy(r).split('\n').slice(1).join('\n').trim(),
+        // Same redacted step view as /siren why, without its header (the grid row shows that).
+        detail: formatWhySteps(r),
       };
     }),
   };
