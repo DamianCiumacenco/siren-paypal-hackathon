@@ -104,7 +104,11 @@ export function createTelegramDmTool(deps: TelegramDmDeps) {
       }
 
       const at = now();
-      if (kind === 'reminder') {
+      // A pay link is only "first delivery" while the member is still pending. Once it's been
+      // sent, any further DM is a reminder, whatever kind the model picked: otherwise
+      // kind:'payment_link' would skip the 24h cap.
+      const reminder = kind === 'reminder' || member.status !== 'pending';
+      if (reminder) {
         const last = await deps.store.lastReminderAt(member.userId);
         if (last && at.getTime() - last.getTime() < REMINDER_COOLDOWN_MS) {
           const hoursLeft = Math.ceil((REMINDER_COOLDOWN_MS - (at.getTime() - last.getTime())) / 3_600_000);
@@ -131,9 +135,9 @@ export function createTelegramDmTool(deps: TelegramDmDeps) {
         throw err;
       }
 
-      if (kind === 'reminder') await deps.store.recordReminder(member.splitMemberId, member.remindersSent + 1, at);
+      if (reminder) await deps.store.recordReminder(member.splitMemberId, member.remindersSent + 1, at);
       else await deps.store.markLinkSent(member.splitMemberId);
-      return { ok: true, sent_to: member.displayName, kind };
+      return { ok: true, sent_to: member.displayName, kind: reminder ? 'reminder' : 'payment_link' };
     },
   });
 }

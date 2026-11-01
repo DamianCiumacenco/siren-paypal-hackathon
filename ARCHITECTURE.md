@@ -489,7 +489,7 @@ One file per SCOPE success criterion, run against the deployed server:
 | PayPal toolkit API changes mid-build | Pin exact version in package.json; subscribe to repo releases |
 | Agent calls PayPal tools incorrectly | Toolkit's own schemas constrain this; add zod validation on our custom tools |
 | Agent loops forever | `stopWhen: stepCountIs(6)` enforced by Vercel AI SDK — can't exceed |
-| Agent spams group | Nag rate-limit (1/24h/user) enforced inside `telegram_dm` tool handler before send |
+| Agent spams group | Nag rate-limit (1/24h/user, across groups and channels) enforced in code before anything is sent: `telegram_dm` (any DM after the first pay link counts as a reminder, whatever `kind` the model picks) and the scoped `send_invoice_reminder`. The scheduler also skips without an LLM call when everyone unpaid was reminded <24h ago. Tests: `telegram-dm`, `paypal-scoped`, `scheduler`, e2e criterion 5 |
 | PayPal sandbox outage during demo | Pre-recorded backup clip on a known-good day |
 | Render cold start | UptimeRobot ping every 10 min |
 | Groq free-tier limits (8k tokens/min, 200k/day) | Skip-without-LLM fast paths, LLM-free money paths, Groq → Gemini → NVIDIA failover. (A response cache was rejected — see Milestone 12.) |

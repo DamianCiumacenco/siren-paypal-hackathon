@@ -69,6 +69,22 @@ describe('telegram_dm tool', () => {
     expect(sendDm).toHaveBeenCalledOnce();
   });
 
+  it('a "payment_link" to someone who already has their link is a reminder: same 24h cap', async () => {
+    const { store, sendDm, run } = setup(jay, new Date(NOW.getTime() - 2 * 3_600_000));
+    const res = (await run('payment_link')) as { ok: boolean; error: string };
+    expect(res).toMatchObject({ ok: false, error: expect.stringMatching(/rate limited/) });
+    expect(sendDm).not.toHaveBeenCalled();
+    expect(store.recordReminder).not.toHaveBeenCalled();
+  });
+
+  it('…and when allowed, it is recorded as a reminder (so the next one is capped)', async () => {
+    const { store, sendDm, run } = setup(jay, null);
+    expect(await run('payment_link')).toEqual({ ok: true, sent_to: 'Jay', kind: 'reminder' });
+    expect(sendDm).toHaveBeenCalledOnce();
+    expect(store.recordReminder).toHaveBeenCalledWith(MEMBER_ID, 2, NOW);
+    expect(store.markLinkSent).not.toHaveBeenCalled();
+  });
+
   it.each(['paid', 'cancelled'] as const)('never DMs a member who is %s', async (status) => {
     const { sendDm, run } = setup({ ...jay, status });
     expect((await run('reminder')) as { ok: boolean }).toMatchObject({ ok: false });
