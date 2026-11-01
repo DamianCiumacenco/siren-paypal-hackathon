@@ -1,5 +1,6 @@
 import { tool, type Tool, type ToolSet } from 'ai';
 import { executeToolkit } from '../../paypal/toolkit.js';
+import { safeErrorMessage } from '../../lib/safe-error.js';
 import type { AgentContext } from '../types.js';
 import { REMINDER_COOLDOWN_MS, type DmMember } from './telegram_dm.js';
 
@@ -36,7 +37,7 @@ async function runToolkit(t: Tool, input: unknown): Promise<Result> {
   try {
     return { ...(await executeToolkit(t, input)), ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    return { ok: false, error: safeErrorMessage(err) };
   }
 }
 

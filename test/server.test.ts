@@ -391,6 +391,24 @@ describe('setupTelegram: Telegram problems never crash the server', () => {
     await bad.close();
   });
 
+  it('an unexpected route error answers a generic 500: no message or stack reaches the caller', async () => {
+    const paypal = { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } };
+    const app = await buildServer({ paypal });
+    app.get('/boom', async () => {
+      throw new Error('loadSplit(abc) failed: relation "splits" does not exist');
+    });
+    app.post('/echo', async (req) => req.body);
+    const res = await app.inject({ method: 'GET', url: '/boom' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'internal error' });
+    expect(res.body).not.toMatch(/loadSplit|relation|at .*\.ts/);
+    // Malformed JSON is the caller's fault: 400 with a generic body, not the parser's message.
+    const bad = await app.inject({ method: 'POST', url: '/echo', headers: { 'content-type': 'application/json' }, payload: '{nope' });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json()).toEqual({ error: 'bad request' });
+    await app.close();
+  });
+
   it('GET /health reports the Telegram state', async () => {
     telegramStatus.state = 'retrying';
     const app = await buildServer({ paypal: { webhookIds: [], store: { markInvoicePaid: async () => 0, markInvoiceCancelled: async () => 0 } } });

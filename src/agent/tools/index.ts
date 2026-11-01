@@ -1,5 +1,6 @@
 import type { ToolSet } from 'ai';
 import type { Config } from '../../config.js';
+import type { Logger } from '../../lib/safe-error.js';
 import { getDb } from '../../db/client.js';
 import { createHistoryStore } from '../../db/history.js';
 import { createMemoryStore } from '../../db/memory.js';
@@ -9,6 +10,7 @@ import { getPayPalTools } from '../../paypal/toolkit.js';
 import type { AgentContext } from '../types.js';
 import { createFetchGroupHistoryTool } from './fetch_group_history.js';
 import { createGetMemberProfileTool } from './get_member_profile.js';
+import { withToolLogging } from './logged.js';
 import { scopePayPalTools } from './paypal_scoped.js';
 import { createRememberPreferenceTool } from './remember_preference.js';
 import { createScheduleFollowupTool } from './schedule_followup.js';
@@ -20,6 +22,8 @@ export interface ToolDeps {
   config: Config;
   /** Always the bot's own api (server.ts), so every Telegram call goes through one client. */
   sendDm: SendDm;
+  /** One structured line per tool call (ids + outcome only). */
+  log?: Logger;
 }
 
 /**
@@ -53,5 +57,5 @@ export function getAllTools(context: AgentContext, deps: ToolDeps): ToolSet {
     store: createSplitStore(db),
     senderUserId: context.sender?.userId,
   });
-  return tools;
+  return deps.log ? withToolLogging(tools, deps.log, { groupId: context.groupId, splitId: context.splitId }) : tools;
 }

@@ -3,6 +3,7 @@ import { loadConfig } from '../config.js';
 import { getDb } from '../db/client.js';
 import { loadGroupContext } from '../db/group_context.js';
 import { insertReasoningLog } from '../db/reasoning_log.js';
+import type { Logger } from '../lib/safe-error.js';
 import { getModel } from '../llm/providers.js';
 import { summariseSteps, type ReasoningRecord, type Thought } from './reasoning-log.js';
 import { buildUserTurn, STABLE_SYSTEM_PROMPT } from './system-prompt.js';
@@ -32,13 +33,13 @@ export interface AgentDeps {
   persist: (record: ReasoningRecord) => Promise<void>;
 }
 
-async function defaultDeps(input: AgentInput, sendDm: SendDm | undefined): Promise<AgentDeps> {
+async function defaultDeps(input: AgentInput, sendDm: SendDm | undefined, log: Logger | undefined): Promise<AgentDeps> {
   if (!sendDm) throw new Error('runAgent needs sendDm (the bot\'s api) unless tools are overridden');
   const config = loadConfig();
   const db = getDb();
   return {
     model: getModel(config),
-    tools: getAllTools(input.context, { config, sendDm }),
+    tools: getAllTools(input.context, { config, sendDm, log }),
     groupContext: await loadGroupContext(db, input.context.groupId),
     persist: (record) => insertReasoningLog(db, record),
   };
@@ -58,10 +59,10 @@ export function findSplitProposal(thoughts: Thought[]): { splitId: string } | un
 /** Single entry point for the agent: one call = one generateText tool loop. */
 export async function runAgent(
   input: AgentInput,
-  { sendDm, ...overrides }: Partial<AgentDeps> & { sendDm?: SendDm } = {},
+  { sendDm, log, ...overrides }: Partial<AgentDeps> & { sendDm?: SendDm; log?: Logger } = {},
 ): Promise<AgentOutput> {
   const complete = overrides.model && overrides.tools && 'groupContext' in overrides && overrides.persist;
-  const deps: AgentDeps = complete ? (overrides as AgentDeps) : { ...(await defaultDeps(input, sendDm)), ...overrides };
+  const deps: AgentDeps = complete ? (overrides as AgentDeps) : { ...(await defaultDeps(input, sendDm, log)), ...overrides };
 
   const result = await generateText({
     model: deps.model,

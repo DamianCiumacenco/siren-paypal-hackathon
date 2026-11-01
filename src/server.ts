@@ -142,6 +142,15 @@ export async function setupTelegram(opts: {
 /** Build the Fastify app without listening — tests use `app.inject()` against this. */
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' });
+  // Fastify's default handler logs the whole error object and returns err.message to the
+  // caller. Ours logs the safe message with ids only and returns a generic body.
+  app.setErrorHandler((err: { statusCode?: number; code?: string }, req, reply) => {
+    const status = err.statusCode && err.statusCode >= 400 && err.statusCode < 500 ? err.statusCode : 500;
+    const route = req.routeOptions.url ?? 'unknown';
+    if (status === 500) logError(req.log, err, 'request failed', { route, reqId: req.id });
+    else req.log.warn({ route, reqId: req.id, status, code: err.code }, 'request rejected');
+    return reply.code(status).send({ error: status === 500 ? 'internal error' : 'bad request' });
+  });
   await app.register(healthRoutes, deps.health ?? {});
   if (deps.telegram) await app.register(telegramRoutes, deps.telegram);
   await app.register(paypalRoutes, deps.paypal);
@@ -175,7 +184,7 @@ async function main(): Promise<void> {
   // The agent's telegram_dm goes through the bot's own api, like every other Telegram call
   // (so there's one client, and the e2e sink sees agent DMs too).
   const agent = (input: AgentInput) =>
-    runAgent(input, { sendDm: async (to, text) => void (await bot.api.sendMessage(to, text)) });
+    runAgent(input, { sendDm: async (to, text) => void (await bot.api.sendMessage(to, text)), log });
   const bot = createBot(config.TELEGRAM_BOT_TOKEN, undefined, {
     registry: createChatRegistry(db),
     lock,
