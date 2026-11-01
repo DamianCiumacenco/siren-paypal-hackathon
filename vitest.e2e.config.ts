@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // they share one LLM quota and one production server.
 export default defineConfig({
   test: {
-    include: ['test/e2e/criterion-*.test.ts'],
+    include: ['test/e2e/*.test.ts'], // criterion-1…7 + other live checks (e.g. dashboard-live)
     fileParallelism: false,
     sequence: { concurrent: false },
     testTimeout: 300_000,

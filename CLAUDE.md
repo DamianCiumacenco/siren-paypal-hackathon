@@ -77,6 +77,7 @@ For Damian + 3 mates ("Jay", "Sean", "Mike"). Uses the sandbox, so no real money
 10. Jay pays his link (sandbox login). With the webhook from step 4, the group gets "✅ Jay paid … — 1/3 paid" (no LLM) and his memory is recomputed. The last payment settles the split with 🎉.
 11. Autonomy: leave a split unpaid. Within ~5 min the scheduler reminds overdue members on its own (posts "Reminded …"); `/siren why` then says "scheduled check". `/siren why` (shows the last decision's real steps, redacted), `/siren tone chill` (Sean), `/siren about Mike`, `/nag` → reminders respect each person's tone, max 1 per person per 24h (a second `/nag` is refused).
 12. `/split €10 test with Jay` → ❌ Cancel → nothing is sent.
+12b. `/siren dashboard` (any member) → DM with a 24h link to this group's read-only dashboard; the group only gets "sent you … in a DM". Open it: members/reliability, splits, agent decisions (click one = its redacted steps).
 
 **LLM budget:** Groq free tier = 200k tokens/day (rolling), ~25 agent replies. When it runs out, Siren fails over to Gemini, then NVIDIA NIM (logged as `LLM provider quota exhausted — failing over`). Only if all three are out does it reply "AI quota is used up on every provider". Deterministic paths (✅ send, payment posts, `/siren why`) use no LLM.
 

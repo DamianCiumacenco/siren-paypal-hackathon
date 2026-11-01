@@ -80,14 +80,14 @@ siren/
 │   ├── routes/
 │   │   ├── telegram.ts              # POST /webhook/telegram
 │   │   ├── paypal.ts                # POST /webhook/paypal
-│   │   ├── dashboard.ts             # GET /dashboard (optional)
+│   │   ├── dashboard.ts             # GET /dashboard (+ /dashboard/api, app.js, app.css) — milestone 15
 │   │   └── health.ts                # GET /health
 │   ├── config.ts
 │   └── server.ts
 ├── test/
 │   ├── agent.test.ts                # mocked generateText, assert correct tool sequence
 │   └── parser-cases.test.ts         # 20+ sample messages → expected tool calls
-├── public/                           # dashboard assets (optional)
+├── public/                           # dashboard.html / .js / .css (AG Grid Community 32.3.3 from jsDelivr)
 ├── .env.example
 ├── .gitignore
 ├── render.yaml
@@ -460,6 +460,19 @@ Build-order rule: **tests pass at each milestone** before moving on.
 - Production (Render, Frankfurt), `npm run cache:report -- 48`: 4 agent runs, 5 Groq steps, 13.8k input tokens, cached **not reported** on every step. Real traffic is sparse (minutes to hours between calls), so a provider prefix cache, which lives minutes, rarely gets a second hit.
 - Local `agent:live --scenario memory`: Groq `gpt-oss-120b` reported its **first hit: 2,304 of 2,997 input tokens cached (77%)** on a call made right after another one with the same prefix. So Groq's free tier does cache, but only for back-to-back calls and without reporting it otherwise. Over a whole run: 10% (memory scenario), **35% for the full `agent:live`** (20 steps, 22.3k of 63.6k input tokens cached) and 42% for the scheduler scenario, where passes hit several splits in a row.
 - Conclusion: the prefix layout works when calls come in quick succession (a busy group, a scheduler pass over several splits). It's not a cost lever at hackathon traffic, and no change is planned.
+
+## Milestone 15 — dashboard (read-only, per group)
+
+```
+Group: /siren dashboard (no LLM) → DM to the requester:
+  https://<PUBLIC_URL>/dashboard#t=<groupId>.<expires>.<hmac>     (never posted in the group)
+Browser: /dashboard (static page) reads the fragment → GET /dashboard/api with x-dashboard-token
+  → verify HMAC + expiry → that ONE group's splits, members, reasoning log
+```
+- **Access** (`src/dashboard/link.ts`): HMAC-SHA256 over `groupId.expires`, key derived from the bot token (rotating the token kills every link), valid 24h. The token cannot be edited to another group or extended. It lives in the URL **fragment**, which browsers never send, so it never reaches request logs. The page moves it to sessionStorage and clears the address bar. 401 without a token, 403 bad/expired.
+- **Data** (`src/dashboard/data.ts`): the same facts and redaction as the bot. Amounts from the DB, the creator's share never owed, reasoning through `formatWhy`/`redact` (no pay links, invoice numbers, ids or DM wording), no memory notes, no Telegram ids.
+- **UI** (`public/`): AG Grid Community (sortable/filterable grids: members with a reliability bar and learned-vs-stated tone, splits, agent decisions; click a decision for its steps). Strict CSP (scripts only from self + the pinned CDN), `no-store`, `no-referrer`, no framing. Light/dark from the OS. All API data rendered as text.
+- **Checks:** `test/dashboard.test.ts` (links, data, routes, command, PII), `verify:live` (page 200, API 401), `test/e2e/dashboard-live.test.ts` (live: DM'd link opens that group only; a forged other-group token → 403).
 
 ## Milestone 14 — live e2e suite (`npm run test:e2e`)
 

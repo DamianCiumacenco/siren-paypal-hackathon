@@ -30,6 +30,7 @@ Damian will tell you what to do. It'll be things like:
   - `/siren why` (shows how Siren made its last decision)
   - `/siren about <someone>`
   - `/siren tone chill` (or `neutral` / `direct`): how you'd like to be reminded
+  - `/siren dashboard`: Siren DMs you a private link to this group's dashboard (valid 24h, don't share it)
 
 **If something looks off** (a wrong amount, a DM you didn't expect, a link meant for someone else, or an error message from Siren), screenshot it and send it to Damian. That's exactly what we're looking for.
 

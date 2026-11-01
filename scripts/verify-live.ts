@@ -27,6 +27,12 @@ else {
   check('Telegram wired up (webhook mode)', body.telegram === 'webhook', `telegram: ${body.telegram ?? '(not reported)'}`);
 }
 
+// Dashboard (milestone 15): page served, data endpoint refuses requests without a signed link.
+const dashPage = await fetch(`${base}/dashboard`, { signal: AbortSignal.timeout(30_000) }).catch((e: Error) => e);
+check('Dashboard page served', !(dashPage instanceof Error) && dashPage.status === 200, dashPage instanceof Error ? dashPage.message : `HTTP ${dashPage.status}`);
+const dashApi = await fetch(`${base}/dashboard/api`, { signal: AbortSignal.timeout(30_000) }).catch((e: Error) => e);
+check('Dashboard data needs a signed link', !(dashApi instanceof Error) && dashApi.status === 401, dashApi instanceof Error ? dashApi.message : `HTTP ${dashApi.status}`);
+
 // 2. Telegram delivers to this deployment, with no recent delivery errors
 const info = await new Api(loadConfig().TELEGRAM_BOT_TOKEN).getWebhookInfo();
 check('Telegram webhook points at this deployment', info.url === `${base}/webhook/telegram`, info.url || '(none — bot is in polling mode)');
