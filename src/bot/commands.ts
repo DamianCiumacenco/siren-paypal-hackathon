@@ -13,6 +13,7 @@ export const HELP_TEXT = [
   '/siren why — why I did what I did last',
   '/siren debt — who owes whom overall',
   '/siren tone <chill|neutral|direct> — how you want to be reminded',
+  '/siren dashboard — a private link to this group\'s dashboard',
   '',
   'You can also mention me or reply to me in the group.',
   'Open a private chat with me and press Start so I can DM you your pay links.',

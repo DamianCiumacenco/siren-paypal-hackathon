@@ -24,6 +24,10 @@ import { sendSplitInvoices } from './paypal/split_invoices.js';
 import { getPayPalTools } from './paypal/toolkit.js';
 import { SIMULATOR_WEBHOOK_ID, type InvoiceStore } from './paypal/webhooks.js';
 import { healthRoutes, type HealthRouteOptions } from './routes/health.js';
+import { dashboardRoutes, type DashboardRouteOptions } from './routes/dashboard.js';
+import { dashboardKey, dashboardUrl, signDashboardToken } from './dashboard/link.js';
+import { createDashboardStore } from './db/dashboard.js';
+import { recentReasoningLogs } from './db/reasoning_log.js';
 import { paypalRoutes, type PayPalRouteOptions } from './routes/paypal.js';
 import { telegramRoutes } from './routes/telegram.js';
 import { e2eRoutes, type E2ERouteOptions } from './routes/e2e.js';
@@ -37,6 +41,7 @@ export interface ServerDeps {
   telegram?: { bot: Bot<SirenContext>; secretToken: string };
   paypal: PayPalRouteOptions;
   health?: HealthRouteOptions;
+  dashboard?: DashboardRouteOptions;
   /** Only when E2E_SECRET is set (milestone 14 e2e suite). */
   e2e?: E2ERouteOptions;
 }
@@ -140,6 +145,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   await app.register(healthRoutes, deps.health ?? {});
   if (deps.telegram) await app.register(telegramRoutes, deps.telegram);
   await app.register(paypalRoutes, deps.paypal);
+  if (deps.dashboard) await app.register(dashboardRoutes, deps.dashboard);
   if (deps.e2e) await app.register(e2eRoutes, deps.e2e);
   return app;
 }
@@ -161,6 +167,10 @@ async function main(): Promise<void> {
   const lock = new ChatLock(); // shared by user messages and the scheduler
   const splits = createSplitStore(db);
   const history = createHistoryStore(db);
+  // Dashboard (milestone 15): per-group signed links, key derived from the bot token.
+  const dashKey = dashboardKey(config.TELEGRAM_BOT_TOKEN);
+  const publicBase = config.PUBLIC_URL ?? `http://localhost:${config.PORT}`;
+  const dashboardStore = createDashboardStore(db);
   const paypalTools = getPayPalTools(config);
   // The agent's telegram_dm goes through the bot's own api, like every other Telegram call
   // (so there's one client, and the e2e sink sees agent DMs too).
@@ -171,6 +181,7 @@ async function main(): Promise<void> {
     lock,
     lastReasoning: (groupId) => lastReasoningLog(db, groupId),
     groupSplits: (groupId) => history.splits(groupId, { limit: 10 }),
+    dashboardLink: (groupId) => dashboardUrl(publicBase, signDashboardToken(groupId, dashKey)),
     runAgent: (input) => agent(input),
     splits,
     sendSplit: (split) =>
@@ -207,6 +218,15 @@ async function main(): Promise<void> {
   const webhookMode = Boolean(config.PUBLIC_URL);
   app = await buildServer({
     telegram: webhookMode ? { bot, secretToken: telegramSecret } : undefined,
+    dashboard: {
+      key: dashKey,
+      sources: {
+        groupTitle: (groupId) => dashboardStore.groupTitle(groupId),
+        splits: (groupId) => history.splits(groupId, { limit: 50 }),
+        members: (groupId) => dashboardStore.members(groupId),
+        reasoning: (groupId) => recentReasoningLogs(db, groupId, 50),
+      },
+    },
     health: {
       dbPing: async () => {
         const { error } = await db.from('groups').select('id').limit(1);

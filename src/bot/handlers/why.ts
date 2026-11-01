@@ -39,7 +39,7 @@ function formatTime(iso: string): string {
   return `${d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short', timeZone: 'UTC' })} ${d.toISOString().slice(11, 16)} UTC`;
 }
 
-const TRIGGER_LABEL: Record<string, string> = {
+export const TRIGGER_LABEL: Record<string, string> = {
   user_message: 'replying to a message',
   scheduled_run: 'scheduled check',
   webhook: 'after a payment',

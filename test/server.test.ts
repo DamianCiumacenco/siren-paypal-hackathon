@@ -191,6 +191,7 @@ describe('Telegram webhook mode: errors never reach Fastify', () => {
       sendSplit: async () => ({ dmed: [], linkInGroup: [], failed: [] }),
       lastReasoning: async () => null,
       groupSplits: async () => [],
+      dashboardLink: () => 'https://siren.test/dashboard#t=x',
       log: { info: capture, warn: capture, error: capture },
     });
     bot.api.config.use(async (_prev, method, payload) => {
@@ -265,6 +266,7 @@ describe('Telegram webhook mode: errors never reach Fastify', () => {
       sendSplit: async () => ({ dmed: [], linkInGroup: [], failed: [] }),
       lastReasoning: async () => null,
       groupSplits: async () => [],
+      dashboardLink: () => 'https://siren.test/dashboard#t=x',
       log: { info: capture, warn: capture, error: capture },
     });
     bot.api.config.use(async () => ({ ok: true, result: true }) as never);

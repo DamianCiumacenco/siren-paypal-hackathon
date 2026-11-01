@@ -79,6 +79,7 @@ function setup(overrides: Partial<BotDeps> = {}) {
     sendSplit: vi.fn(async () => ({ dmed: ['Jay'], linkInGroup: [], failed: [] })),
     lastReasoning: vi.fn(async () => null),
     groupSplits: vi.fn(async () => []),
+    dashboardLink: vi.fn((g: number) => `https://siren.test/dashboard#t=${g}.1.sig`),
     log,
     background: (p) => void pending.push(p),
     ...overrides,

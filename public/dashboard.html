@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Siren dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/styles/ag-grid.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/styles/ag-theme-quartz.css">
+  <link rel="stylesheet" href="/dashboard/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@32.3.3/dist/ag-grid-community.min.js" defer></script>
+  <script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">Siren · read-only</p>
+      <h1 id="title">Dashboard</h1>
+    </div>
+    <p class="meta" id="meta"></p>
+  </header>
+
+  <main>
+    <p class="notice" id="notice" hidden></p>
+
+    <section class="stats" id="stats" hidden>
+      <div class="stat"><span class="stat-value" id="stat-open">–</span><span class="stat-label">open splits</span></div>
+      <div class="stat"><span class="stat-value" id="stat-owed">–</span><span class="stat-label">people owing</span></div>
+      <div class="stat"><span class="stat-value" id="stat-decisions">–</span><span class="stat-label">agent decisions</span></div>
+    </section>
+
+    <section class="card" id="members-card" hidden>
+      <h2>Members</h2>
+      <p class="hint">What Siren has learned from each person's payment record. Tone is "learned" from reliability unless the person set it with /siren tone.</p>
+      <div id="members" class="grid"></div>
+    </section>
+
+    <section class="card" id="splits-card" hidden>
+      <h2>Splits</h2>
+      <p class="hint">The person who created a split paid the bill; their own share is never owed.</p>
+      <div id="splits" class="grid"></div>
+    </section>
+
+    <section class="card" id="reasoning-card" hidden>
+      <h2>Agent decisions</h2>
+      <p class="hint">Every agent run, newest first. Select one to see its real steps (redacted like /siren why).</p>
+      <div id="reasoning" class="grid"></div>
+      <pre id="detail" class="detail" hidden></pre>
+    </section>
+  </main>
+</body>
+</html>
